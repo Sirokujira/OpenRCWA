@@ -6,6 +6,8 @@ n   : array size (<=1024)
 s   : array (shared memory)
 sum : sum (output)
 */
+//#include "orcwa.h"
+
 __device__
 void reduction_sum(int tid, int n, real_t *s, real_t *sum)
 {
@@ -22,3 +24,4 @@ void reduction_sum(int tid, int n, real_t *s, real_t *sum)
 		*sum = s[0];
 	}
 }
+

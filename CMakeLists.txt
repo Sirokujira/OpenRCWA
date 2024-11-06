@@ -4,12 +4,19 @@ project(openRCWA
   DESCRIPTION "A free and open source RCWA solver"
   LANGUAGES C CXX CUDA)
 
-set (CMAKE_CXX_STANDARD 17)
+# cmake/Modules ディレクトリをモジュールの検索パスに追加
+set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/Modules/")
+
+include(sploosh_utils)
+# compile option
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_STANDARD 11)
 find_package(Threads REQUIRED)
 
 # CUDA を使用するかどうかを設定するオプションを追加
-option(USE_CUDA "Enable CUDA support" ON)
-if(USE_CUDA)
+option(WITH_CUDA "Enable CUDA support" OFF)
+if(WITH_CUDA)
     #set(CMAKE_CUDA_HOST_COMPILER /usr/bin/g++)
     message(STATUS ${CMAKE_CUDA_COMPILER})
     message(STATUS ${CMAKE_CUDA_HOST_COMPILER})
@@ -21,15 +28,17 @@ if(USE_CUDA)
     #message(STATUS "_MPI マクロが定義されました")
     # CUDA のコンパイラフラグを設定
     #set(CUDA_NVCC_FLAGS "${CUDA_NVCC_FLAGS} -Xcompiler -pthread")
+    set(MAGMA_INCLUDE_DIR /usr/local/include)
+    set(MAGMA_LIBRARIES libmagma.so;
+        libiomp5.so)
 else()
     #message(STATUS "CUDA マクロは定義されていません")
 endif()
 
-
 # MPI を使用するかどうかを設定するオプションを追加
-option(USE_MPI "Enable MPI support" OFF)
+option(WITH_MPI "Enable MPI support" OFF)
 # オプションに基づいて _MPI を定義
-if(USE_MPI)
+if(WITH_MPI)
     #before : -D_MPI
     find_package(MPI REQUIRED C)
     #+cuda
@@ -38,6 +47,40 @@ if(USE_MPI)
     message(STATUS "_MPI マクロが定義されました")
 else()
     message(STATUS "_MPI マクロは定義されていません")
+endif()
+
+find_package(MKL REQUIRED)
+if(MKL_FOUND)
+    message(STATUS "MKL libraries: ${MKL_LIBRARIES}")
+    message(STATUS "MKL include directory: ${MKL_INCLUDE_DIR}")
+    message(STATUS "MKL OpenMP type: ${MKL_OPENMP_TYPE}")
+    message(STATUS "MKL OpenMP library: ${MKL_OPENMP_LIBRARY}")
+    add_definitions(-DEIGEN_WITH_MKL_ALL)
+endif()
+
+find_package(Eigen3 3.3 CONFIG REQUIRED)
+if (EIGEN3_FOUND)
+   message(STATUS "Found Eigen version ${EIGEN3_VERSION_STRING}: ${EIGEN3_INCLUDE_DIRS}")
+endif ()
+
+find_package(TBB 2021.5 REQUIRED)
+if (TBB_FOUND)
+    message(STATUS "Found Intel TBB version ${TBB_VERSION}: ${TBB_INCLUDE_DIRS} ${TBB_LIBRARIES}")
+endif ()
+
+if (WITH_CUDA)
+  include_directories(
+    ${MKL_INCLUDE_DIR}
+    ${EIGEN3_INCLUDE_DIRS}
+    ${TBB_INCLUDE_DIRS}
+    ${CUDAToolkit_INCLUDE_DIRS}
+  )
+else()
+  include_directories(
+    ${MKL_INCLUDE_DIR}
+    ${EIGEN3_INCLUDE_DIRS}
+    ${TBB_INCLUDE_DIRS}
+  )
 endif()
 
 #対応 geometry数
@@ -60,7 +103,7 @@ set(EXECUTABLE_OUTPUT_PATH ${CMAKE_BINARY_DIR})
 find_package(OpenMP REQUIRED)
 # Find MPI package
 
-if(USE_MPI)
+if(WITH_MPI)
     file(GLOB MPI_SOURCES "mpi/*.c")
 else()
     file(GLOB SOURCES "sol/*.c")
@@ -88,7 +131,7 @@ if (HDF5_FOUND)
     # If HDF5 is build with parallel support it requires MPI, which needs
     # to be enabled
     if (HDF5_IS_PARALLEL)
-      if (USE_MPI)
+      if (WITH_MPI)
       #  set(OP2_HDF5_INCLUDE_DIRS ${OP2_HDF5_INCLUDE_DIRS} ${MPI_INCLUDE_PATH})
       #  set(OP2_HDF5_LIBRARIES ${OP2_HDF5_LIBRARIES} ${MPI_LIBRARIES})
       #  # MPI is always built with HDF5 if available
@@ -105,7 +148,7 @@ if (HDF5_FOUND)
 endif()
 
 # CUDA が見つかった場合のみターゲットをビルド
-if (USE_CUDA)
+if (WITH_CUDA)
     #if (CUDA_FOUND)
     if (CUDAToolkit_FOUND)
         #CC : nvcc
@@ -165,7 +208,7 @@ if (USE_CUDA)
         set(CUDA_NVCC_FLAGS "${CUDA_NVCC_FLAGS} -gencode arch=compute_60,code=sm_60")
 
         # Add CUDA executable
-        if (USE_MPI)
+        if (WITH_MPI)
             # Add CUDA source files(reject solve.cu)
             #file(GLOB CUDA_SOURCES "cuda/*.cu")
             set(CUDA_SOURCES2
@@ -208,13 +251,13 @@ if (USE_CUDA)
             )
 
             file(GLOB CUDA_MPI_SOURCES "cuda_mpi/*.cu")
-            add_library(orcwa_cuda_mpi_lib ${SOURCES2} ${MPI_SOURCES2} ${CUDA_MPI_SOURCES} ${CUDA_SOURCES2})
-            target_include_directories(orcwa_cuda_mpi_lib PUBLIC "${PROJECT_SOURCE_DIR}/include")
-            target_link_libraries(orcwa_cuda_mpi_lib PRIVATE ${CUDA_LIBRARIES})
-            target_link_libraries(orcwa_cuda_mpi_lib PRIVATE OpenMP::OpenMP_C pthread m)
-            target_link_libraries(orcwa_cuda_mpi_lib PRIVATE MPI::MPI_C hdf5::hdf5)
+            add_library(orcwa_cuda_libmpi ${SOURCES2} ${MPI_SOURCES2} ${CUDA_MPI_SOURCES} ${CUDA_SOURCES2})
+            target_include_directories(orcwa_cuda_libmpi PUBLIC "${PROJECT_SOURCE_DIR}/include")
+            target_link_libraries(orcwa_cuda_libmpi PRIVATE ${CUDA_LIBRARIES})
+            target_link_libraries(orcwa_cuda_libmpi PRIVATE OpenMP::OpenMP_C pthread m)
+            target_link_libraries(orcwa_cuda_libmpi PRIVATE MPI::MPI_C hdf5::hdf5)
             #error
-            #target_link_libraries(orcwa_cuda_mpi_lib PRIVATE MPI::MPI_C hdf5::hdf5-shared)
+            #target_link_libraries(orcwa_cuda_libmpi PRIVATE MPI::MPI_C hdf5::hdf5-shared)
 
             #add_executable(orcwa_cuda_mpi ${SOURCES2} ${MPI_SOURCES2} ${CUDA_MPI_SOURCES} ${CUDA_SOURCES2} src/cuda_mpi_Main.cu)
             add_executable(orcwa_cuda_mpi src/cuda_mpi_Main.cu)
@@ -223,8 +266,8 @@ if (USE_CUDA)
             target_include_directories(orcwa_cuda_mpi PUBLIC "${PROJECT_SOURCE_DIR}/include")
 
             # Link CUDA libraries
-            #orcwa_cuda_mpi_lib
-            target_link_libraries(orcwa_cuda_mpi PRIVATE orcwa_cuda_mpi_lib)
+            #orcwa_cuda_libmpi
+            target_link_libraries(orcwa_cuda_mpi PRIVATE orcwa_cuda_libmpi)
             target_link_libraries(orcwa_cuda_mpi PRIVATE ${CUDA_LIBRARIES})
             target_link_libraries(orcwa_cuda_mpi PRIVATE OpenMP::OpenMP_C pthread m)
             target_link_libraries(orcwa_cuda_mpi PRIVATE MPI::MPI_C hdf5::hdf5)
@@ -267,8 +310,6 @@ if (USE_CUDA)
             )
             #reduction_sum.cu
 
-            #add_library(orcwa_cuda_lib ${SOURCES2} ${CUDA_SOURCES})
-
             #add_executable(orcwa_cuda ${CUDA_SOURCES} src/cuda_Main.cu)
             #add_executable(orcwa_cuda ${CUDA_SOURCES} ${OBJECT_FILES} src/cuda_Main.cu)
             add_executable(orcwa_cuda ${SOURCES2} ${CUDA_SOURCES} src/cuda_Main.cu)
@@ -305,6 +346,78 @@ if (USE_CUDA)
                 target_link_libraries(orcwa_cuda PRIVATE m hdf5::hdf5)
             endif()
 
+            add_exe(test_gpu
+                tests/test_gpu.cpp
+                ${RCWA_SRC_FILES}
+                ${GDSTK_SRC_FILES}
+                ${CORE_SRC_FILES}
+                ${GPU_SRC_FILES}
+              LINK_LIBRARIES
+                ${MKL_LIBRARIES}
+                ${TBB_LIBRARIES}
+                ${MAGMA_LIBRARIES}
+                m
+                stdc++
+                cusolver
+                cublas
+              OUT_DIR
+                ${ROOT_TESTS_DIR})
+            set_property(TARGET test_gpu PROPERTY CXX_STANDARD 17)
+
+            add_exe(test_metasurface_gpu
+                tests/test_metasurface_gpu.cpp
+                ${RCWA_SRC_FILES}
+                ${GDSTK_SRC_FILES}
+                ${CORE_SRC_FILES}
+                ${GPU_SRC_FILES}
+              LINK_LIBRARIES
+                ${MKL_LIBRARIES}
+                ${TBB_LIBRARIES}
+                ${MAGMA_LIBRARIES}
+                m
+                stdc++
+                cusolver
+                cublas
+              OUT_DIR
+                ${ROOT_TESTS_DIR})
+            set_property(TARGET test_metasurface_gpu PROPERTY CXX_STANDARD 17)
+
+            add_exe(test_oe_model_gpu
+                tests/test_oe_model_gpu.cpp
+                ${RCWA_SRC_FILES}
+                ${GDSTK_SRC_FILES}
+                ${CORE_SRC_FILES}
+                ${GPU_SRC_FILES}
+              LINK_LIBRARIES
+                ${MKL_LIBRARIES}
+                ${TBB_LIBRARIES}
+                ${MAGMA_LIBRARIES}
+                m
+                stdc++
+                cusolver
+                cublas
+              OUT_DIR
+                ${ROOT_TESTS_DIR})
+            set_property(TARGET test_oe_model_gpu PROPERTY CXX_STANDARD 17)
+
+            add_exe(test_gds_gpu
+                tests/test_gds_gpu.cpp
+                ${RCWA_SRC_FILES}
+                ${GDSTK_SRC_FILES}
+                ${CORE_SRC_FILES}
+                ${GPU_SRC_FILES}
+              LINK_LIBRARIES
+                ${MKL_LIBRARIES}
+                ${TBB_LIBRARIES}
+                ${MAGMA_LIBRARIES}
+                m
+                stdc++
+                cusolver
+                cublas
+              OUT_DIR
+                ${ROOT_TESTS_DIR})
+            set_property(TARGET test_gds_gpu PROPERTY CXX_STANDARD 17)
+
         endif()
 
         # CUDA のプロパティ設定 (オプション)(x)
@@ -318,7 +431,7 @@ if (USE_CUDA)
         message(WARNING "CUDA が見つかりませんでした。CUDA サポートは無効です。")
     endif()
 else()
-    if(USE_MPI)
+    if(WITH_MPI)
         #solve.c reject
         set(SOURCES3
             ${CMAKE_SOURCE_DIR}/sol/average.c
@@ -366,6 +479,7 @@ else()
             ${CMAKE_SOURCE_DIR}/sol/setupMurHx.c
             ${CMAKE_SOURCE_DIR}/sol/setupMurHy.c
             ${CMAKE_SOURCE_DIR}/sol/setupMurHz.c
+            ${CMAKE_SOURCE_DIR}/sol/setupNear.c_
             ${CMAKE_SOURCE_DIR}/sol/setupPml.c
             ${CMAKE_SOURCE_DIR}/sol/setupPmlEx.c
             ${CMAKE_SOURCE_DIR}/sol/setupPmlEy.c
@@ -418,12 +532,83 @@ else()
         # ターゲットのオブジェクトディレクトリを設定
         set_target_properties(orcwa PROPERTIES
             OBJECT_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/obj"
+
+        add_exe(test_gds_cpu
+            tests/test_gds_cpu.cpp
+            ${RCWA_SRC_FILES}
+            ${GDSTK_SRC_FILES}
+            ${ROOT_SRC_DIR}/core/LayerSampler.cpp
+            ${ROOT_SRC_DIR}/core/VarLayerSampler.cpp
+            ${ROOT_SRC_DIR}/core/RedhefferIntegrator.cpp
+            ${ROOT_SRC_DIR}/core/RCWAIntegrator.cpp
+            ${ROOT_SRC_DIR}/core/DifferentialIntegrator.cpp
+            ${ROOT_SRC_DIR}/core/GDSIISampler.cpp
+            ${ROOT_SRC_DIR}/core/Material.cpp
+          LINK_LIBRARIES
+            ${MKL_LIBRARIES}
+            ${TBB_LIBRARIES}
+            m
+            stdc++
+          OUT_DIR
+            ${ROOT_TESTS_DIR})
+        set_property(TARGET test_gds_cpu PROPERTY CXX_STANDARD 17)
+
+        add_exe(test_cpu
+            tests/test_cpu.cpp
+            ${RCWA_SRC_FILES}
+            ${ROOT_SRC_DIR}/core/LayerSampler.cpp
+            ${ROOT_SRC_DIR}/core/VarLayerSampler.cpp
+            ${ROOT_SRC_DIR}/core/RedhefferIntegrator.cpp
+            ${ROOT_SRC_DIR}/core/RCWAIntegrator.cpp
+            ${ROOT_SRC_DIR}/core/DifferentialIntegrator.cpp
+          LINK_LIBRARIES
+            ${MKL_LIBRARIES}
+            ${TBB_LIBRARIES}
+            m
+            stdc++
+          OUT_DIR
+            ${ROOT_TESTS_DIR})
+        set_property(TARGET test_cpu PROPERTY CXX_STANDARD 17)
+
+        add_exe(test_metasurface_cpu
+            tests/test_metasurface_cpu.cpp
+            ${RCWA_SRC_FILES}
+            ${ROOT_SRC_DIR}/core/LayerSampler.cpp
+            ${ROOT_SRC_DIR}/core/VarLayerSampler.cpp
+            ${ROOT_SRC_DIR}/core/RedhefferIntegrator.cpp
+            ${ROOT_SRC_DIR}/core/RCWAIntegrator.cpp
+            ${ROOT_SRC_DIR}/core/DifferentialIntegrator.cpp
+          LINK_LIBRARIES
+            ${MKL_LIBRARIES}
+            ${TBB_LIBRARIES}
+            m
+            stdc++
+          OUT_DIR
+            ${ROOT_TESTS_DIR})
+        set_property(TARGET test_metasurface_cpu PROPERTY CXX_STANDARD 17)
+
+        add_exe(test_cpu_diff
+            tests/test_cpu_differential_method.cpp
+            ${RCWA_SRC_FILES}
+            ${ROOT_SRC_DIR}/core/LayerSampler.cpp
+            ${ROOT_SRC_DIR}/core/VarLayerSampler.cpp
+            ${ROOT_SRC_DIR}/core/RedhefferIntegrator.cpp
+            ${ROOT_SRC_DIR}/core/RCWAIntegrator.cpp
+            ${ROOT_SRC_DIR}/core/DifferentialIntegrator.cpp
+          LINK_LIBRARIES
+            ${MKL_LIBRARIES}
+            ${TBB_LIBRARIES}
+            m
+            stdc++
+          OUT_DIR
+            ${ROOT_TESTS_DIR})
+        set_property(TARGET test_cpu_diff PROPERTY CXX_STANDARD 17)
         )
     endif()
 endif()
 
-option(USE_POST "Enable Prepost Tool" ON)
-if (USE_POST)
+option(WITH_POST "Enable Prepost Tool" ON)
+if (WITH_POST)
     file(GLOB POST_SOURCES "post/*.c")
     set(SOURCES3
         ${CMAKE_SOURCE_DIR}/sol/nearfield_c.c
@@ -442,4 +627,29 @@ if (USE_POST)
     target_link_libraries(orcwa_post PRIVATE OpenMP::OpenMP_C m hdf5::hdf5)
 
 endif()
+
+#option(WITH_TOOL "Enable Convert Tool" ON)
+#if (WITH_TOOL)
+#    # Siloライブラリを探す
+#    find_package(Silo REQUIRED)
+#    if(Silo_FOUND)
+#      file(GLOB CONVERT_SOURCES "utils/*.c")
+#      set(SOURCES4
+#            ${CMAKE_SOURCE_DIR}/sol/geomlines.c
+#            ${CMAKE_SOURCE_DIR}/sol/input2.c
+#            ${CMAKE_SOURCE_DIR}/sol/input_data.c
+#            ${CMAKE_SOURCE_DIR}/sol/ingeometry.c
+#            ${CMAKE_SOURCE_DIR}/sol/utils.c
+#      )
+#
+#      add_executable(orcwa_to_silo ${SOURCES4} ${CONVERT_SOURCES})
+#      # Include directories for header files
+#      target_include_directories(orcwa_to_silo PUBLIC "${PROJECT_SOURCE_DIR}/include" ${Silo_INCLUDE_DIRS})
+#
+#      target_link_libraries(orcwa_to_silo PRIVATE OpenMP::OpenMP_C hdf5::hdf5 ${Silo_LIBRARIES} m)
+#    else()
+#      message(FATAL_ERROR "Silo library not found")
+#    endif()
+#
+#endif()
 
