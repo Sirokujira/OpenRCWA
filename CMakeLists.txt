@@ -56,6 +56,19 @@ else()
     find_package(LAPACK REQUIRED)
     set(MKL_LIBRARIES ${LAPACK_LIBRARIES})
     set(MKL_INCLUDE_DIR "")
+
+    # LAPACKE (zgeev/cgeev) があれば、RCWA の固有値計算で
+    # Eigen::ComplexEigenSolver より高速な LAPACKE 経由のソルバを使用する
+    find_path(LAPACKE_INCLUDE_DIR lapacke.h)
+    find_library(LAPACKE_LIBRARY NAMES lapacke)
+    if(LAPACKE_INCLUDE_DIR AND LAPACKE_LIBRARY)
+        message(STATUS "LAPACKE が見つかりました: ${LAPACKE_LIBRARY}")
+        add_definitions(-DUSE_LAPACKE)
+        list(APPEND MKL_LIBRARIES ${LAPACKE_LIBRARY})
+        set(MKL_INCLUDE_DIR ${LAPACKE_INCLUDE_DIR})
+    else()
+        message(STATUS "LAPACKE が見つかりません。Eigen の固有値ソルバを使用します。")
+    endif()
 endif()
 
 find_package(Eigen3 3.3 CONFIG REQUIRED)
