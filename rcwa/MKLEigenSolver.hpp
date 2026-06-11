@@ -1,6 +1,28 @@
 #pragma once
 #include "defns.h"
 #include <Eigen/Core>
+
+#ifndef USE_MKL
+// MKL が利用できない環境では Eigen の固有値ソルバにフォールバックする
+#include <Eigen/Eigenvalues>
+
+template <class MatrixType>
+class MKLEigenSolver
+{
+private:
+    typedef typename MatrixType::Scalar ScalarType;
+    typedef Eigen::Matrix<ScalarType, Eigen::Dynamic, 1> VectorType;
+
+    Eigen::ComplexEigenSolver<MatrixType> es_;
+
+public:
+    MKLEigenSolver() {}
+    void compute(const MatrixType& A) { es_.compute(A, true); }
+    const MatrixType& eigenvectors() const { return es_.eigenvectors(); }
+    const VectorType& eigenvalues() const { return es_.eigenvalues(); }
+};
+
+#else // USE_MKL
 #include <mkl.h>
 
 template <class MatrixType>
@@ -124,3 +146,4 @@ void MKLEigenSolver<MatrixType>::compute(const MatrixType& A)
         ScalarType::unimplemented;
     }
 }
+#endif // USE_MKL
