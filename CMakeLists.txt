@@ -14,6 +14,7 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(Threads REQUIRED)
+find_package(OpenMP REQUIRED)
 
 # CUDA を使用するかどうかを設定するオプションを追加
 option(WITH_CUDA "Enable CUDA support" OFF)
@@ -25,9 +26,20 @@ if(WITH_CUDA)
     # CUDAToolkit を探す
     find_package(CUDAToolkit REQUIRED)
     set(CMAKE_CUDA_ARCHITECTURES 60)
-    set(MAGMA_INCLUDE_DIR /usr/local/include)
-    set(MAGMA_LIBRARIES libmagma.so;
-        libiomp5.so)
+
+    # MAGMA (差分法 GPU ソルバの固有値計算で使用)
+    find_path(MAGMA_INCLUDE_DIR magma_v2.h
+        PATHS /usr/local/include /usr/include)
+    find_library(MAGMA_LIBRARY NAMES magma
+        PATHS /usr/local/lib /usr/lib /usr/lib/x86_64-linux-gnu)
+    if(MAGMA_INCLUDE_DIR AND MAGMA_LIBRARY)
+        message(STATUS "MAGMA が見つかりました: ${MAGMA_LIBRARY}")
+        set(MAGMA_LIBRARIES ${MAGMA_LIBRARY} OpenMP::OpenMP_CXX)
+    else()
+        message(WARNING "MAGMA が見つかりません。GPU の差分法ソルバはビルドされません。")
+        set(MAGMA_INCLUDE_DIR "")
+        set(MAGMA_LIBRARIES "")
+    endif()
 endif()
 
 # MPI を使用するかどうかを設定するオプションを追加
@@ -102,9 +114,6 @@ add_compile_definitions(_ID32)
 #output folder
 set(CMAKE_BINARY_DIR ${CMAKE_SOURCE_DIR}/bin)
 set(EXECUTABLE_OUTPUT_PATH ${CMAKE_BINARY_DIR})
-
-# Find OpenMP package
-find_package(OpenMP REQUIRED)
 
 if(WITH_MPI)
     file(GLOB MPI_SOURCES "mpi/*.c")
