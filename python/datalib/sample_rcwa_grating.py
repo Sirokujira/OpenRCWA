@@ -12,8 +12,9 @@ OpenRCWA データ作成ライブラリ (Python) サンプルプログラム
 モデル概要:
   - 周期 Lambda = 0.5 um のガラス(epsr=2.25)製1次元矩形格子
   - デューティ比 50% (リッジ幅 0.25 um, 格子層厚さ 0.2 um)
-  - x, y方向を周期境界(PBC)、z方向をPML吸収境界とする
-  - 上方(空気側)から平面波を垂直入射 (theta=0, phi=0)
+  - x, y方向を周期境界(PBC)、z方向を吸収境界(Mur-1次)とする
+    (本ソルバではPBC使用時の吸収境界はMur-1次となる)
+  - 上方(空気側)から平面波を垂直入射 (theta=0, phi=0, V偏波)
   - 可視光波長 400nm - 700nm に対応する周波数範囲で計算
 """
 
@@ -47,12 +48,12 @@ orcwa.geometry(2, 1, -Lambda / 2, +Lambda / 2, -Lambda / 2, +Lambda / 2, -substr
 # 格子リッジ (0 <= z <= grating_h, x方向に半周期幅): ガラス
 orcwa.geometry(2, 1, -ridge_width / 2, +ridge_width / 2, -Lambda / 2, +Lambda / 2, 0.0, grating_h)
 
-# 周期境界条件: x, y方向を周期境界、z方向はPML
+# 周期境界条件: x, y方向を周期境界
+# (z方向は吸収境界。PBC使用時はMur-1次が用いられるためPMLは指定しない)
 orcwa.pbc(1, 1, 0)
-orcwa.pml(8, 2, 1e-5)
 
-# 平面波入射: 垂直入射 (theta=0, phi=0), pol=0
-orcwa.planewave(0, 0, 0)
+# 平面波入射: 垂直入射 (theta=0, phi=0), pol=1 (V偏波)
+orcwa.planewave(0, 0, 1)
 
 # 観測点: 上部(反射側, -Z伝搬)と下部(透過側, +Z伝搬)
 orcwa.point('Z', 0.0, 0.0, grating_h + air_h * 0.5, '-Z')
