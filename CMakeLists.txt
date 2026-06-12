@@ -437,3 +437,12 @@ if (WITH_POST)
 
     target_link_libraries(orcwa_post PRIVATE OpenMP::OpenMP_C m hdf5::hdf5)
 endif()
+
+option(WITH_DATALIB "Build C data-creation library and samples" ON)
+if(WITH_DATALIB)
+    add_library(orcwa_datalib STATIC datalib/orcwa_datalib.c)
+    target_include_directories(orcwa_datalib PUBLIC "${CMAKE_SOURCE_DIR}/datalib")
+
+    add_executable(sample_rcwa_grating datalib/sample_rcwa_grating.c)
+    target_link_libraries(sample_rcwa_grating PRIVATE orcwa_datalib)
+endif()
