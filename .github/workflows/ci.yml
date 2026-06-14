@@ -1,0 +1,103 @@
+name: CI
+
+# CPU-only build & smoke test for the OpenRCWA / OpenFDTD-derived solver,
+# the RCWA library, and the data-creation libraries (C / Python).
+# CUDA/MKL/MPI are optional and intentionally disabled here so the build
+# runs on stock GitHub-hosted runners.
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - 'claude/**'
+  pull_request:
+  workflow_dispatch:
+
+# 同一ブランチで新しい push があれば実行中のジョブをキャンセルする
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Build & smoke test (CPU, Ubuntu)
+    runs-on: ubuntu-24.04
+
+    env:
+      BUILD_DIR: build
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            cmake \
+            ninja-build \
+            liblapack-dev \
+            liblapacke-dev \
+            libeigen3-dev \
+            libtbb-dev \
+            libhdf5-dev \
+            libomp-dev \
+            python3
+
+      - name: Configure (CPU-only)
+        run: |
+          cmake -S . -B "$BUILD_DIR" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DWITH_CUDA=OFF \
+            -DWITH_MPI=OFF \
+            -DWITH_RCWA=ON \
+            -DWITH_POST=ON \
+            -DWITH_DATALIB=ON
+
+      - name: Build
+        run: cmake --build "$BUILD_DIR" -j"$(nproc)"
+
+      - name: Verify expected binaries
+        run: |
+          set -e
+          for exe in bin/orcwa bin/orcwa_post bin/sample_rcwa_grating \
+                     bin/tests/test_cpu bin/tests/test_cpu_diff \
+                     bin/tests/test_gds_cpu bin/tests/test_metasurface_cpu; do
+            if [ ! -x "$exe" ]; then
+              echo "::error::expected executable not found: $exe"
+              exit 1
+            fi
+            echo "ok: $exe"
+          done
+
+      - name: C data-creation library — generate sample input
+        run: |
+          set -e
+          cd "$RUNNER_TEMP"
+          "$GITHUB_WORKSPACE/bin/sample_rcwa_grating"
+          test -f sample_rcwa_grating.orcwa
+          grep -q '^OpenRCWA 4 2' sample_rcwa_grating.orcwa
+          grep -q '^pbc = 1 1 0' sample_rcwa_grating.orcwa
+          grep -q '^planewave = 0 0 1' sample_rcwa_grating.orcwa
+          echo "C datalib output OK"
+
+      - name: Python data-creation library — regression check
+        run: |
+          set -e
+          cd python/datalib
+          cp sample_rcwa_grating.orcwa "$RUNNER_TEMP/committed.orcwa"
+          python3 sample_rcwa_grating.py
+          # 生成物が現在コミットされているファイルと一致することを確認する
+          diff -u "$RUNNER_TEMP/committed.orcwa" sample_rcwa_grating.orcwa
+          echo "Python datalib regression OK"
+
+      - name: Solver smoke test
+        run: |
+          set -e
+          cd "$RUNNER_TEMP"
+          "$GITHUB_WORKSPACE/bin/orcwa" -n 2 \
+            "$GITHUB_WORKSPACE/ci/smoke_test.orcwa" | tee solver.log
+          grep -q "normal end" solver.log
+          echo "Solver smoke test OK"
