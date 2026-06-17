@@ -1,0 +1,12 @@
+OpenRCWA 4 2
+title = CI smoke test (RCWA air-glass Fresnel, R=0.04)
+xmesh = -2.5e-07 10 2.5e-07
+ymesh = -2.5e-07 10 2.5e-07
+zmesh = -3e-07 10 0.0 10 7e-07
+material = 1 2.25 0 1 0
+geometry = 2 1 -2.5e-07 2.5e-07 -2.5e-07 2.5e-07 -3e-07 0
+planewave = 0 0 1
+pbc = 1 1 0
+rcwaorder = 6 0
+frequency1 = 5.0e+14 5.0e+14 0
+end

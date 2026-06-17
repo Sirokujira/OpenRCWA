@@ -62,7 +62,7 @@ jobs:
       - name: Verify expected binaries
         run: |
           set -e
-          for exe in bin/orcwa bin/orcwa_post bin/sample_rcwa_grating \
+          for exe in bin/orcwa bin/orcwa_post bin/orcwa_rcwa bin/sample_rcwa_grating \
                      bin/tests/test_cpu bin/tests/test_cpu_diff \
                      bin/tests/test_gds_cpu bin/tests/test_metasurface_cpu; do
             if [ ! -x "$exe" ]; then
@@ -93,11 +93,36 @@ jobs:
           diff -u "$RUNNER_TEMP/committed.orcwa" sample_rcwa_grating.orcwa
           echo "Python datalib regression OK"
 
-      - name: Solver smoke test
+      - name: FDTD solver smoke test
         run: |
           set -e
           cd "$RUNNER_TEMP"
           "$GITHUB_WORKSPACE/bin/orcwa" -n 2 \
             "$GITHUB_WORKSPACE/ci/smoke_test.orcwa" | tee solver.log
           grep -q "normal end" solver.log
-          echo "Solver smoke test OK"
+          echo "FDTD solver smoke test OK"
+
+      - name: RCWA solver smoke test
+        run: |
+          set -e
+          cd "$RUNNER_TEMP"
+          # 空気/ガラス界面の Fresnel 反射 (解析解 R=0.04, R+T=1) を検証
+          "$GITHUB_WORKSPACE/bin/orcwa_rcwa" -o rcwa.csv \
+            "$GITHUB_WORKSPACE/ci/smoke_rcwa.orcwa" | tee rcwa.log
+          grep -q "normal end" rcwa.log
+          python3 - rcwa.csv <<'PY'
+          import sys
+          path = sys.argv[1]
+          row = None
+          with open(path) as f:
+              for line in f:
+                  if line.startswith('#') or not line.strip():
+                      continue
+                  row = [float(v) for v in line.split(',')]
+          assert row is not None, "no data row in " + path
+          lam, R, T, RT = row
+          assert abs(R - 0.04) < 2e-3, f"R={R} expected ~0.04"
+          assert abs(RT - 1.0) < 1e-3, f"R+T={RT} expected ~1 (energy conservation)"
+          print(f"RCWA Fresnel OK: R={R:.5f}, T={T:.5f}, R+T={RT:.5f}")
+          PY
+          echo "RCWA solver smoke test OK"
