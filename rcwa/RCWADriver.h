@@ -16,8 +16,13 @@
 struct RCWAResult
 {
     scalar lambda;  // 波長 [μm]
-    scalar R;       // 反射率 (0 次および全回折次数の和)
-    scalar T;       // 透過率
+    scalar R;       // 反射率 (全回折次数の和)
+    scalar T;       // 透過率 (全回折次数の和)
+
+    // 各回折次数の反射率・透過率 (長さ = (2*nHx+1)*(2*nHy+1))
+    // 格子: REF_orders[ny*i+j] は (m=i-Nx, n=j-Ny) 次の反射効率
+    std::vector<scalar> REF_orders;
+    std::vector<scalar> TRN_orders;
 };
 
 // prob を解き、波長ごとの R/T を返す。失敗時は空配列を返し err を設定する。

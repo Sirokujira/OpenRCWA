@@ -13,11 +13,24 @@
 // スケール不変だが、慣用に合わせて μm を用いる)。波長も μm で保持する。
 // ============================================================
 
-// 直方体 (geometry shape=1) の領域。座標は μm。
+// geometry 形状の種別 (OpenFDTD 互換)
+enum RCWAShape {
+    RCWA_SHAPE_BOX       = 1,   // 直方体
+    RCWA_SHAPE_SPHERE    = 2,   // 球 / 楕円体
+    RCWA_SHAPE_CYL_Z     = 11,  // z 軸方向の円柱 (XY 断面が楕円)
+    RCWA_SHAPE_CYL_X     = 12,  // x 軸方向の円柱
+    RCWA_SHAPE_CYL_Y     = 13,  // y 軸方向の円柱
+};
+
+// geometry ひとつ分の領域。座標は μm。
 struct RCWABox
 {
-    int    material;                 // 材料インデックス (materialEps の添字)
-    scalar x0, x1, y0, y1, z0, z1;   // 直方体の範囲 [μm]
+    int    material;                   // 材料インデックス
+    int    shape = RCWA_SHAPE_BOX;    // 形状種別
+    scalar x0, x1, y0, y1, z0, z1;   // バウンディングボックス [μm]
+
+    // 点 (xc, yc) が z スラブ内でこの形状に含まれるか判定する。
+    bool containsXY(scalar xc, scalar yc) const;
 };
 
 struct RCWAProblem
@@ -36,10 +49,15 @@ struct RCWAProblem
     int nHx = 10;
     int nHy = 0;
 
-    // 材料インデックス -> 複素誘電率。0 = 空気, 1 = PEC, 2 以降がユーザ材料。
+    // 材料インデックス -> 複素誘電率 (実部)。損失項は materialSigma を参照。
+    // 0 = 空気, 1 = PEC, 2 以降がユーザ材料。
     std::vector<scalex> materialEps;
 
-    // 物体形状 (直方体のみ対応)
+    // 導電率 [S/m]。materialEps と同サイズ。0 なら無損失。
+    // 波長 λ での複素誘電率: eps + i * (-sigma / (omega * eps0))
+    std::vector<scalar> materialSigma;
+
+    // 物体形状 (box, cylinder-z, sphere など)
     std::vector<RCWABox> boxes;
 
     // 平面波入射

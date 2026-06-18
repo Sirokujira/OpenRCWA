@@ -47,7 +47,9 @@ RCWASolver::RCWASolver(const RCWASolver& solver)
 	matKy_ = solver.matKy_;
 
 	enablePML_ = solver.enablePML_;
-	
+	kx0_ = solver.kx0_;
+	ky0_ = solver.ky0_;
+
 	for (auto layer : solver.layers_)
 	{
 		// should make a deep copy of Layer
@@ -224,8 +226,8 @@ void RCWASolver::evaluateAlphaBeta(
 			scalar m = i - Nx;
 			scalar n = j - Ny;
 
-			alpha.diagonal()(ny_ * i + j) = Kx * m;
-			beta.diagonal()(ny_ * i + j) = Ky * n;
+			alpha.diagonal()(ny_ * i + j) = Kx * m + kx0_;
+			beta.diagonal()(ny_ * i + j)  = Ky * n + ky0_;
 		}
 	}
 }

@@ -6,6 +6,38 @@
 #include <cmath>
 #include <set>
 
+// ============================================================
+// RCWABox::containsXY
+// ============================================================
+bool RCWABox::containsXY(scalar xc, scalar yc) const
+{
+    switch (shape) {
+    case RCWA_SHAPE_BOX:
+        return xc >= x0 && xc <= x1 && yc >= y0 && yc <= y1;
+
+    case RCWA_SHAPE_SPHERE:
+    case RCWA_SHAPE_CYL_Z: {
+        // 楕円 / 球 (XY 断面): バウンディングボックス中心・半径で正規化
+        scalar cx = 0.5*(x0+x1), cy = 0.5*(y0+y1);
+        scalar rx = 0.5*(x1-x0), ry = 0.5*(y1-y0);
+        if (rx <= 0 || ry <= 0) return false;
+        scalar dx = (xc-cx)/rx, dy = (yc-cy)/ry;
+        return dx*dx + dy*dy <= 1.0;
+    }
+
+    case RCWA_SHAPE_CYL_X:
+        // x 軸方向の円柱: YZ 断面が楕円
+        return yc >= y0 && yc <= y1;  // x は z スラブ判定済みなので y のみ
+
+    case RCWA_SHAPE_CYL_Y:
+        // y 軸方向の円柱: XZ 断面が楕円
+        return xc >= x0 && xc <= x1;
+
+    default:
+        return false;
+    }
+}
+
 namespace {
 
 constexpr scalar C0      = 2.99792458e8;  // 光速 [m/s]
@@ -38,6 +70,9 @@ bool parseRCWAInput(const std::string& path, RCWAProblem& prob, std::string& err
     prob.materialEps.clear();
     prob.materialEps.push_back(scalex(1.0, 0.0));      // 0: 空気
     prob.materialEps.push_back(scalex(1.0, -1.0e8));   // 1: PEC (近似)
+    prob.materialSigma.clear();
+    prob.materialSigma.push_back(0.0);  // 0: 空気
+    prob.materialSigma.push_back(0.0);  // 1: PEC
 
     bool haveFreq = false;
     int  nline = 0;
@@ -99,26 +134,33 @@ bool parseRCWAInput(const std::string& path, RCWAProblem& prob, std::string& err
             }
             else if (key == "material") {
                 // material = type epsr esgm amur msgm
-                // type==1: 通常材料。epsr を実部、esgm を簡易的な損失として扱う
-                if (nv >= 5) {
+                // type==1: 通常材料。epsr を実部、esgm を導電率として保存する。
+                if (nv >= 2) {
                     scalar epsr = toScalar(V(1));
+                    scalar esgm = (nv >= 3) ? toScalar(V(2)) : 0.0;
                     prob.materialEps.push_back(scalex(epsr, 0.0));
+                    prob.materialSigma.push_back(esgm);
                 }
             }
             else if (key == "geometry") {
-                // geometry = m shape x0 x1 y0 y1 z0 z1 (shape=1: 直方体)
+                // geometry = m shape x0 x1 y0 y1 z0 z1
+                // shape=1: 直方体, shape=2: 球, shape=11: z 軸円柱, etc.
                 if (nv >= 8) {
                     int m     = toInt(V(0));
                     int shape = toInt(V(1));
-                    if (shape == 1) {
-                        RCWABox box;
-                        box.material = m;
-                        box.x0 = toScalar(V(2)) * M_TO_UM;
-                        box.x1 = toScalar(V(3)) * M_TO_UM;
-                        box.y0 = toScalar(V(4)) * M_TO_UM;
-                        box.y1 = toScalar(V(5)) * M_TO_UM;
-                        box.z0 = toScalar(V(6)) * M_TO_UM;
-                        box.z1 = toScalar(V(7)) * M_TO_UM;
+                    RCWABox box;
+                    box.material = m;
+                    box.shape = static_cast<RCWAShape>(shape);
+                    box.x0 = toScalar(V(2)) * M_TO_UM;
+                    box.x1 = toScalar(V(3)) * M_TO_UM;
+                    box.y0 = toScalar(V(4)) * M_TO_UM;
+                    box.y1 = toScalar(V(5)) * M_TO_UM;
+                    box.z0 = toScalar(V(6)) * M_TO_UM;
+                    box.z1 = toScalar(V(7)) * M_TO_UM;
+                    // 既知の形状のみ追加 (未対応形状は無視)
+                    if (shape == RCWA_SHAPE_BOX    || shape == RCWA_SHAPE_SPHERE  ||
+                        shape == RCWA_SHAPE_CYL_Z  || shape == RCWA_SHAPE_CYL_X  ||
+                        shape == RCWA_SHAPE_CYL_Y) {
                         prob.boxes.push_back(box);
                     }
                 }
@@ -213,13 +255,14 @@ void sampleCrossSection1D(
     coordX.assign(xs.begin(), xs.end());
 
     // 各セル中央で物体の有無を判定し、誘電率を決める (後勝ち)
+    scalar yc = 0.5 * (prob.ymin + prob.ymax);
     eps.clear();
     for (size_t i = 0; i + 1 < coordX.size(); ++i) {
         scalar xc = 0.5 * (coordX[i] + coordX[i + 1]);
         scalex e  = prob.backgroundEps;
         for (const auto& b : prob.boxes) {
             if (zCenter < b.z0 || zCenter > b.z1) continue;
-            if (xc >= b.x0 && xc <= b.x1) {
+            if (b.containsXY(xc, yc)) {
                 if (b.material >= 0 &&
                     b.material < static_cast<int>(prob.materialEps.size())) {
                     e = prob.materialEps[b.material];

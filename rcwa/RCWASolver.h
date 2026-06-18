@@ -39,6 +39,10 @@ public:
 	
 	bool enablePML_;
 
+	// Bloch wavevector offsets for oblique incidence [1/μm]
+	scalar kx0_ = 0.0;
+	scalar ky0_ = 0.0;
+
 	std::vector< std::shared_ptr< Layer > > layers_;
 	bool isLayerSolved_;
 
@@ -169,6 +173,10 @@ public:
 
 	void enablePML() { enablePML_ = true; }
 	void disablePML() { enablePML_ = false; }
+
+	// Set the Bloch wavevector offset for oblique incidence (in 1/μm).
+	// Call before solve(). kx0 = k0*n_inc*sin(θ)*cos(φ), ky0 = …*sin(φ).
+	void setBlochWavevector(scalar kx0, scalar ky0) { kx0_ = kx0; ky0_ = ky0; }
 	
     void evaluateKMatrices(Eigen::MatrixXcs& Kx, Eigen::MatrixXcs& Ky);
 

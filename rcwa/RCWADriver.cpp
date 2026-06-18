@@ -4,15 +4,18 @@
 
 #include <algorithm>
 #include <set>
+#include <cmath>
 #include <iostream>
 
 using namespace Eigen;
 
 namespace {
 
-// 全スラブで共有する x 方向ブレークポイント (μm) を作る。
-// addLayer は全層が同一の境界座標を持つことを要求するため、各直方体の x エッジを
-// 集めた共通格子を用いる。
+// 光速 [μm/s] と真空誘電率 [F/m] — 複素誘電率の導電率項計算に使用。
+constexpr scalar C0_UM  = 2.99792458e14;   // c [μm/s]
+constexpr scalar EPS0   = 8.854187817e-12; // ε₀ [F/m]
+
+// 全スラブ共通の x エッジを収集する。
 std::vector<scalar> buildCommonXGrid(const RCWAProblem& prob)
 {
     std::set<scalar> xs;
@@ -27,42 +30,69 @@ std::vector<scalar> buildCommonXGrid(const RCWAProblem& prob)
     return std::vector<scalar>(xs.begin(), xs.end());
 }
 
-// 指定セル中央 (xc) と z スラブ中央 (zc) における誘電率を返す
-scalex epsAt(const RCWAProblem& prob, scalar xc, scalar zc)
+// 全スラブ共通の y エッジを収集する。
+std::vector<scalar> buildCommonYGrid(const RCWAProblem& prob)
+{
+    std::set<scalar> ys;
+    ys.insert(prob.ymin);
+    ys.insert(prob.ymax);
+    for (const auto& b : prob.boxes) {
+        scalar y0 = std::max(b.y0, prob.ymin);
+        scalar y1 = std::min(b.y1, prob.ymax);
+        if (y0 > prob.ymin && y0 < prob.ymax) ys.insert(y0);
+        if (y1 > prob.ymin && y1 < prob.ymax) ys.insert(y1);
+    }
+    return std::vector<scalar>(ys.begin(), ys.end());
+}
+
+// 点 (xc, yc, zc) における複素誘電率。
+// lambda [μm] は損失材料 (esgm≠0) の導電率項の計算に必要。
+scalex epsAt(const RCWAProblem& prob,
+             scalar xc, scalar yc, scalar zc,
+             scalar lambda)
 {
     scalex e = prob.backgroundEps;
     for (const auto& b : prob.boxes) {
         if (zc < b.z0 || zc > b.z1) continue;
-        if (xc >= b.x0 && xc <= b.x1) {
-            if (b.material >= 0 &&
-                b.material < static_cast<int>(prob.materialEps.size())) {
-                e = prob.materialEps[b.material];
+        if (!b.containsXY(xc, yc)) continue;
+        int m = b.material;
+        if (m < 0 || m >= static_cast<int>(prob.materialEps.size())) continue;
+        e = prob.materialEps[m];
+        // 導電率による損失項: Δε_im = -σ/(ω·ε₀)
+        if (!prob.materialSigma.empty() && m < static_cast<int>(prob.materialSigma.size())) {
+            scalar sigma = prob.materialSigma[m];
+            if (sigma != 0.0) {
+                scalar omega = 2.0 * Pi * C0_UM / lambda; // [rad/s]
+                e += scalex(0.0, -sigma / (omega * EPS0));
             }
         }
     }
     return e;
 }
 
-// 共通 x 格子・所与の z スラブから 1D 用の Layer を生成する
+// xgrid×ygrid セル格子と z スラブ中央 zc から Layer を生成する。
+// eps 行列は (nCellY 行 × nCellX 列) で Layer が要求する形式。
 Layer makeLayer(const RCWAProblem& prob,
                 const std::vector<scalar>& xgrid,
-                scalar zc)
+                const std::vector<scalar>& ygrid,
+                scalar zc, scalar lambda)
 {
     const int nCellX = static_cast<int>(xgrid.size()) - 1;
+    const int nCellY = static_cast<int>(ygrid.size()) - 1;
 
     VectorXs coordX(xgrid.size());
     for (size_t i = 0; i < xgrid.size(); ++i) coordX[i] = xgrid[i];
 
-    // 1D 格子: y 方向は単一セル
-    VectorXs coordY(2);
-    coordY[0] = prob.ymin;
-    coordY[1] = prob.ymax;
+    VectorXs coordY(ygrid.size());
+    for (size_t j = 0; j < ygrid.size(); ++j) coordY[j] = ygrid[j];
 
-    // Layer は eps を (nCellY 行 x nCellX 列) で要求する。1D 格子なので y は 1 セル。
-    MatrixXcs eps(1, nCellX);
-    for (int i = 0; i < nCellX; ++i) {
-        scalar xc = 0.5 * (xgrid[i] + xgrid[i + 1]);
-        eps(0, i) = epsAt(prob, xc, zc);
+    MatrixXcs eps(nCellY, nCellX);
+    for (int j = 0; j < nCellY; ++j) {
+        scalar yc = 0.5 * (ygrid[j] + ygrid[j + 1]);
+        for (int i = 0; i < nCellX; ++i) {
+            scalar xc = 0.5 * (xgrid[i] + xgrid[i + 1]);
+            eps(j, i) = epsAt(prob, xc, yc, zc, lambda);
+        }
     }
 
     return Layer(coordX, coordY, eps);
@@ -74,12 +104,7 @@ std::vector<RCWAResult> runRCWA(const RCWAProblem& prob, std::string& err)
 {
     std::vector<RCWAResult> results;
 
-    if (prob.nHy != 0) {
-        err = "現在のドライバは 1D 格子 (nHy=0) のみ対応しています";
-        return results;
-    }
-
-    // z 層境界 (昇順) -> 上端(最大 z)から下端へ並べ替えてスタックを作る
+    // z 層境界 (昇順) -> 上端から下端の順にスタックを作る
     std::vector<scalar> zedges = deriveZEdges(prob);
     if (zedges.size() < 2) {
         err = "z 方向の層を構成できません (zmesh / geometry を確認してください)";
@@ -87,6 +112,7 @@ std::vector<RCWAResult> runRCWA(const RCWAProblem& prob, std::string& err)
     }
 
     std::vector<scalar> xgrid = buildCommonXGrid(prob);
+    std::vector<scalar> ygrid = buildCommonYGrid(prob);
 
     // 各スラブの中心 z と厚さ (上端から下端の順)
     std::vector<scalar> slabCenter, slabThick;
@@ -102,15 +128,33 @@ std::vector<RCWAResult> runRCWA(const RCWAProblem& prob, std::string& err)
     const scalar px = (prob.pol == 2) ? 0.0 : 1.0;
     const scalar py = (prob.pol == 2) ? 1.0 : 0.0;
 
+    // 入射角 [rad]
+    const scalar thetaRad = prob.theta * Pi / 180.0;
+    const scalar phiRad   = prob.phi   * Pi / 180.0;
+
     for (scalar lambda : prob.lambdas) {
         try {
             RCWASolver solver(prob.nHx, prob.nHy);
             solver.disablePML();  // 周期境界 (回折格子)
 
             for (int s = 0; s < nSlab; ++s) {
-                Layer layer = makeLayer(prob, xgrid, slabCenter[s]);
+                Layer layer = makeLayer(prob, xgrid, ygrid, slabCenter[s], lambda);
                 solver.addLayer(layer);
             }
+
+            // 入射側スラブ (最上段) の誘電率から Bloch 位相を決定
+            const int refLayer = 0;
+            const int trnLayer = nSlab - 1;
+            const scalar k0    = 2.0 * Pi / lambda;
+
+            scalex eps_inc = epsAt(prob,
+                                   0.5 * (prob.xmin + prob.xmax),
+                                   0.5 * (prob.ymin + prob.ymax),
+                                   slabCenter[refLayer], lambda);
+            const scalar n_inc = std::sqrt(std::max(eps_inc.real(), scalar(1.0)));
+            const scalar kx0 = k0 * n_inc * std::sin(thetaRad) * std::cos(phiRad);
+            const scalar ky0 = k0 * n_inc * std::sin(thetaRad) * std::sin(phiRad);
+            solver.setBlochWavevector(kx0, ky0);
 
             std::vector<int>    layerStack(nSlab);
             std::vector<scalar> thickness(nSlab);
@@ -121,11 +165,6 @@ std::vector<RCWAResult> runRCWA(const RCWAProblem& prob, std::string& err)
 
             solver.solve(lambda, layerStack, thickness);
 
-            // 入射側 = スタック上端 (layerStack[0]), 透過側 = 下端
-            const int refLayer = 0;
-            const int trnLayer = nSlab - 1;
-            const scalar k0 = 2.0 * Pi / lambda;
-
             VectorXcs cInc;
             solver.generateHorizontalPlaneWave(px, py, refLayer, cInc);
 
@@ -134,8 +173,10 @@ std::vector<RCWAResult> runRCWA(const RCWAProblem& prob, std::string& err)
 
             RCWAResult r;
             r.lambda = lambda;
-            r.R = REF.sum();   // 全回折次数の電力反射率の和
-            r.T = TRN.sum();   // 全回折次数の電力透過率の和
+            r.R = REF.sum();
+            r.T = TRN.sum();
+            r.REF_orders.assign(REF.data(), REF.data() + REF.size());
+            r.TRN_orders.assign(TRN.data(), TRN.data() + TRN.size());
             results.push_back(r);
         }
         catch (const std::exception& e) {

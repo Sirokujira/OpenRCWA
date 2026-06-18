@@ -16,18 +16,23 @@
 
 static void usage()
 {
-    std::cout << "Usage : orcwa_rcwa [-o <out.csv>] <datafile.orcwa>\n";
+    std::cout << "Usage : orcwa_rcwa [-o <out.csv>] [-v] <datafile.orcwa>\n"
+              << "  -o <out.csv>  : output CSV file (default: <input>_rcwa.csv)\n"
+              << "  -v            : verbose — also write per-order efficiencies\n";
 }
 
 int main(int argc, char* argv[])
 {
     std::string infile;
     std::string outfile;
+    bool verbose = false;
 
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
         if (a == "-o" && i + 1 < argc) {
             outfile = argv[++i];
+        } else if (a == "-v" || a == "--verbose") {
+            verbose = true;
         } else if (a == "--help" || a == "-h") {
             usage();
             return 0;
@@ -73,13 +78,30 @@ int main(int argc, char* argv[])
         return 1;
     }
 
+    const int nHx = prob.nHx;
+    const int nHy = prob.nHy;
+    const int nOrd = (2*nHx+1) * (2*nHy+1);
+
     std::ofstream fout(outfile);
-    fout << "# lambda[um], R, T, R+T\n";
     fout << std::setprecision(8);
+    if (verbose) {
+        // per-order header: lambda, R, T, R+T, R_m=-nHx, ..., R_m=nHx,  T_m=-nHx, ...
+        fout << "# lambda[um], R, T, R+T";
+        for (int i = 0; i < nOrd; ++i) fout << ", R_order_" << i;
+        for (int i = 0; i < nOrd; ++i) fout << ", T_order_" << i;
+        fout << "\n";
+    } else {
+        fout << "# lambda[um], R, T, R+T\n";
+    }
+
     std::cout << std::setprecision(6);
     for (const auto& r : results) {
-        fout << r.lambda << ", " << r.R << ", " << r.T << ", "
-             << (r.R + r.T) << "\n";
+        fout << r.lambda << ", " << r.R << ", " << r.T << ", " << (r.R + r.T);
+        if (verbose) {
+            for (scalar v : r.REF_orders) fout << ", " << v;
+            for (scalar v : r.TRN_orders) fout << ", " << v;
+        }
+        fout << "\n";
         std::cout << "  lambda = " << r.lambda << " um   R = " << r.R
                   << "   T = " << r.T << "   R+T = " << (r.R + r.T) << "\n";
     }
