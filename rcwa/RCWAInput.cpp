@@ -73,8 +73,12 @@ bool parseRCWAInput(const std::string& path, RCWAProblem& prob, std::string& err
     prob.materialSigma.clear();
     prob.materialSigma.push_back(0.0);  // 0: 空気
     prob.materialSigma.push_back(0.0);  // 1: PEC
+    prob.materialDispersion.clear();
+    prob.materialDispersion.emplace_back();  // 0: 空気 (非分散)
+    prob.materialDispersion.emplace_back();  // 1: PEC  (非分散)
 
-    bool haveFreq = false;
+    bool haveFreq1 = false;
+    bool haveFreq2 = false;
     int  nline = 0;
 
     std::string line;
@@ -140,6 +144,20 @@ bool parseRCWAInput(const std::string& path, RCWAProblem& prob, std::string& err
                     scalar esgm = (nv >= 3) ? toScalar(V(2)) : 0.0;
                     prob.materialEps.push_back(scalex(epsr, 0.0));
                     prob.materialSigma.push_back(esgm);
+                    prob.materialDispersion.emplace_back();  // 非分散として初期化
+                }
+            }
+            else if (key == "material_dispersion") {
+                // material_dispersion = m einf ae be ce  [SI 単位: rad/s]
+                // Lorentz 単極モデル: eps(omega) = einf + ae^2/(ce^2-omega^2-i*be*omega)
+                if (nv >= 5) {
+                    int m = toInt(V(0));
+                    if (m >= 0 && m < static_cast<int>(prob.materialDispersion.size())) {
+                        prob.materialDispersion[m].einf = toScalar(V(1));
+                        prob.materialDispersion[m].ae   = toScalar(V(2));
+                        prob.materialDispersion[m].be   = toScalar(V(3));
+                        prob.materialDispersion[m].ce   = toScalar(V(4));
+                    }
                 }
             }
             else if (key == "geometry") {
@@ -184,20 +202,22 @@ bool parseRCWAInput(const std::string& path, RCWAProblem& prob, std::string& err
                 if (nv >= 2) prob.nHy = toInt(V(1));
             }
             else if (key == "frequency1" || key == "frequency2") {
-                // frequency1 = f0 f1 ndiv  [Hz] -> 波長 [μm] に変換
-                if (!haveFreq && nv >= 3) {
+                // frequency1/2 = f0 f1 ndiv  [Hz] -> 波長 [μm] に変換
+                // 両方指定された場合は波長を結合し昇順ソート・重複除去する
+                bool isFirst = (key == "frequency1");
+                bool& already = isFirst ? haveFreq1 : haveFreq2;
+                if (!already && nv >= 3) {
                     scalar f0   = toScalar(V(0));
                     scalar f1   = toScalar(V(1));
                     int    ndiv = toInt(V(2));
                     if (ndiv < 0) ndiv = 0;
-                    prob.lambdas.clear();
                     for (int i = 0; i <= ndiv; ++i) {
                         scalar f = (ndiv == 0) ? f0
                                  : f0 + (f1 - f0) * i / static_cast<scalar>(ndiv);
                         if (f > 0)
                             prob.lambdas.push_back((C0 / f) * M_TO_UM);
                     }
-                    haveFreq = true;
+                    already = true;
                 }
             }
             // その他のキーワード (solver, point, plot* 等) は RCWA では無視
@@ -209,9 +229,13 @@ bool parseRCWAInput(const std::string& path, RCWAProblem& prob, std::string& err
     }
 
     if (prob.lambdas.empty()) {
-        err = "周波数 (frequency1) が指定されていません";
+        err = "周波数 (frequency1 / frequency2) が指定されていません";
         return false;
     }
+    // frequency1 と frequency2 を結合した場合に重複を除去し昇順に整列する
+    std::sort(prob.lambdas.begin(), prob.lambdas.end());
+    prob.lambdas.erase(std::unique(prob.lambdas.begin(), prob.lambdas.end()),
+                       prob.lambdas.end());
     if (prob.Lx() <= 0) {
         err = "x 方向の周期が不正です (xmesh を確認してください)";
         return false;

@@ -1,4 +1,4 @@
-# OPenRCWA
+# OpenRCWA
 
 [![CI](https://github.com/sirokujira/openrcwa/actions/workflows/ci.yml/badge.svg)](https://github.com/sirokujira/openrcwa/actions/workflows/ci.yml)
 

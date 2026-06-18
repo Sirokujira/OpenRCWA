@@ -1,6 +1,7 @@
 #pragma once
 #include "rcwa/BlockToeplitzMatrixXcs.h"
 #include "gpu/types.cuh"
+#include <stdexcept>
 
 class LayerSampler
 {
@@ -50,9 +51,17 @@ public:
         Eigen::MatrixXcs& P,
         Eigen::MatrixXcs& Q) = 0;
         
+    // GPU サンプリング。CUDA ビルドでオーバーライドする。
+    // CPU-only ビルドでは呼び出してはならない。
     virtual void sampleOnGPU(scalar z,
         acacia::gpu::complex_t *P,
-        acacia::gpu::complex_t *Q) = 0;
+        acacia::gpu::complex_t *Q)
+    {
+#ifndef ACACIA_HAS_CUDA
+        (void)z; (void)P; (void)Q;
+        throw std::logic_error("sampleOnGPU called in a CPU-only build");
+#endif
+    }
 protected:
     // put this at the end of children's constructor
     void postInitialization();

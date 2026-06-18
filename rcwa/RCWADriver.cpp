@@ -59,6 +59,18 @@ scalex epsAt(const RCWAProblem& prob,
         if (m < 0 || m >= static_cast<int>(prob.materialEps.size())) continue;
         e = prob.materialEps[m];
         // 導電率による損失項: Δε_im = -σ/(ω·ε₀)
+        // Lorentz 分散モデル: eps(omega) = einf + ae^2/(ce^2-omega^2-i*be*omega)
+        if (!prob.materialDispersion.empty() &&
+            m < static_cast<int>(prob.materialDispersion.size())) {
+            const auto& d = prob.materialDispersion[m];
+            if (d.ae != 0.0) {
+                scalar omega = 2.0 * Pi * C0_UM / lambda;
+                scalex denom = scalex(d.ce*d.ce - omega*omega, -d.be*omega);
+                e = scalex(d.einf, 0.0) + scalex(d.ae*d.ae, 0.0) / denom;
+                return e;  // dispersion overrides static eps; skip conductivity term
+            }
+        }
+        // 導電率による損失項: Δε_im = -σ/(ω·ε₀)
         if (!prob.materialSigma.empty() && m < static_cast<int>(prob.materialSigma.size())) {
             scalar sigma = prob.materialSigma[m];
             if (sigma != 0.0) {

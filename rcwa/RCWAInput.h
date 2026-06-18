@@ -57,6 +57,12 @@ struct RCWAProblem
     // 波長 λ での複素誘電率: eps + i * (-sigma / (omega * eps0))
     std::vector<scalar> materialSigma;
 
+    // Lorentz 分散パラメータ (material_dispersion キーワード)。
+    // materialEps と同サイズ。ae==0 なら非分散。
+    // eps(omega) = einf + ae^2 / (ce^2 - omega^2 - i*be*omega)
+    struct LorentzParam { scalar einf=0, ae=0, be=0, ce=0; };
+    std::vector<LorentzParam> materialDispersion;
+
     // 物体形状 (box, cylinder-z, sphere など)
     std::vector<RCWABox> boxes;
 
