@@ -158,3 +158,16 @@ add_exe(test_cpu_diff
   OUT_DIR
     ${ROOT_TESTS_DIR})
 set_property(TARGET test_cpu_diff PROPERTY CXX_STANDARD 17)
+
+# RCWAInput パーサ + RCWADriver の単体テスト
+add_exe(test_rcwa_input
+    test_rcwa_input.cpp
+    ${RCWA_SRC_FILES}
+  LINK_LIBRARIES
+    ${MKL_LIBRARIES}
+    ${TBB_LIBRARIES}
+    m
+    stdc++
+  OUT_DIR
+    ${ROOT_TESTS_DIR})
+set_property(TARGET test_rcwa_input PROPERTY CXX_STANDARD 17)

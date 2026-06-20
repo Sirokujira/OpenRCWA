@@ -1729,13 +1729,20 @@ void RCWASolver::scatterPlaneWave(
 		Kztrn_r(i) = abs(Kztrn(i).real());
 	}
 
-	// we only excite and receive plane wave in dielectric material
-	// metal is not supported for excitation and receiver
-	//
-	// 反射率・透過率はいずれも「入射媒質 (refLayer) 中の入射波フラックス」で
-	// 正規化する。法線入射では入射次数の kz = sqrt(eps_ref)*k0 なので、REF・TRN
-	// の双方をこの値で割る。透過側を eps_trn で割ると屈折率の異なる基板でエネ
-	// ルギー保存 (R+T=1) が崩れるため、両者とも eps_ref を用いる。
-	REF = 1. / (sqrt(eps_ref.real()) * k0) * Kzref_r.asDiagonal() * r;
-	TRN = 1. / (sqrt(eps_ref.real()) * k0) * Kztrn_r.asDiagonal() * t;
+	// 正規化: 入射波の 3D 電場振幅を基準とする。
+	// px=1, py=0 の場合、入射 3D 電場には z 成分 Ez = -kx0/kzinc が含まれるため、
+	// |E_inc_3D|² = 1 + kx0²/kzinc² + ky0²/kzinc² = n_inc²k0²/kzinc²
+	// (分散関係 kx0²+ky0²+kzinc² = n_inc²k0² を利用)
+	// → ポインティングベクトル: S_z^inc ∝ kzinc * |E_inc_3D|² = n_inc²k0²/kzinc
+	// R(i) = kzref(i)*r_3D(i) / (n_inc²k0²/kzinc) = kzinc*kzref(i)*r_3D(i)/(n_inc²k0²)
+	const int incOrd = ny_ * (nx_ - 1) / 2 + (ny_ - 1) / 2;
+	const scalar Kzinc = Kzref_r(incOrd);  // = |kz_inc| = n_inc*k0*cos(θ)
+	if (Kzinc < 1e-12 * k0) {
+		std::cerr << "Warning: incident kz is near zero (grazing incidence?)\n";
+		return;
+	}
+	// n_inc²k0² = kx0_² + ky0_² + Kzinc² (dispersion relation)
+	const scalar ninc2k02 = kx0_ * kx0_ + ky0_ * ky0_ + Kzinc * Kzinc;
+	REF = (Kzinc / ninc2k02) * Kzref_r.asDiagonal() * r;
+	TRN = (Kzinc / ninc2k02) * Kztrn_r.asDiagonal() * t;
 }

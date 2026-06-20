@@ -64,7 +64,8 @@ jobs:
           set -e
           for exe in bin/orcwa bin/orcwa_post bin/orcwa_rcwa bin/sample_rcwa_grating \
                      bin/tests/test_cpu bin/tests/test_cpu_diff \
-                     bin/tests/test_gds_cpu bin/tests/test_metasurface_cpu; do
+                     bin/tests/test_gds_cpu bin/tests/test_metasurface_cpu \
+                     bin/tests/test_rcwa_input; do
             if [ ! -x "$exe" ]; then
               echo "::error::expected executable not found: $exe"
               exit 1
@@ -101,6 +102,14 @@ jobs:
             "$GITHUB_WORKSPACE/ci/smoke_test.orcwa" | tee solver.log
           grep -q "normal end" solver.log
           echo "FDTD solver smoke test OK"
+
+      - name: RCWA unit tests (parser + driver)
+        run: |
+          set -e
+          cd "$RUNNER_TEMP"
+          "$GITHUB_WORKSPACE/bin/tests/test_rcwa_input" | tee rcwa_unit.log
+          # 終了コードが 0 (全 PASS) であることを確認
+          echo "RCWA unit tests OK"
 
       - name: RCWA solver smoke test
         run: |
