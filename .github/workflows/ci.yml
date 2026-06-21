@@ -129,9 +129,10 @@ jobs:
                       continue
                   row = [float(v) for v in line.split(',')]
           assert row is not None, "no data row in " + path
-          lam, R, T, RT = row
+          lam, R, T, A, RT = row
           assert abs(R - 0.04) < 2e-3, f"R={R} expected ~0.04"
           assert abs(RT - 1.0) < 1e-3, f"R+T={RT} expected ~1 (energy conservation)"
-          print(f"RCWA Fresnel OK: R={R:.5f}, T={T:.5f}, R+T={RT:.5f}")
+          assert abs(A) < 1e-3, f"A={A} expected ~0 (lossless)"
+          print(f"RCWA Fresnel OK: R={R:.5f}, T={T:.5f}, A={A:.5f}, R+T={RT:.5f}")
           PY
           echo "RCWA solver smoke test OK"

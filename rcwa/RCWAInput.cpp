@@ -220,6 +220,34 @@ bool parseRCWAInput(const std::string& path, RCWAProblem& prob, std::string& err
                     already = true;
                 }
             }
+            else if (key == "wavelength" || key == "lambda") {
+                // wavelength = lam0 lam1 ndiv  [μm] (直接波長指定)
+                // ndiv=0 のとき lam0 の 1 点のみ。
+                if (nv >= 3) {
+                    scalar lam0 = toScalar(V(0));
+                    scalar lam1 = toScalar(V(1));
+                    int    ndiv = toInt(V(2));
+                    if (ndiv < 0) ndiv = 0;
+                    for (int i = 0; i <= ndiv; ++i) {
+                        scalar lam = (ndiv == 0) ? lam0
+                                   : lam0 + (lam1 - lam0) * i / static_cast<scalar>(ndiv);
+                        if (lam > 0)
+                            prob.lambdas.push_back(lam);
+                    }
+                } else if (nv >= 1) {
+                    // wavelength = lam  (単一波長)
+                    scalar lam = toScalar(V(0));
+                    if (lam > 0) prob.lambdas.push_back(lam);
+                }
+            }
+            else if (key == "background") {
+                // background = epsr [epsi]  — 物体に覆われない領域の誘電率
+                if (nv >= 1) {
+                    scalar epsr = toScalar(V(0));
+                    scalar epsi = (nv >= 2) ? toScalar(V(1)) : 0.0;
+                    prob.backgroundEps = scalex(epsr, epsi);
+                }
+            }
             // その他のキーワード (solver, point, plot* 等) は RCWA では無視
         }
         catch (const std::exception& e) {
@@ -229,7 +257,7 @@ bool parseRCWAInput(const std::string& path, RCWAProblem& prob, std::string& err
     }
 
     if (prob.lambdas.empty()) {
-        err = "周波数 (frequency1 / frequency2) が指定されていません";
+        err = "波長が指定されていません (frequency1 / frequency2 または wavelength キーワードを使用してください)";
         return false;
     }
     // frequency1 と frequency2 を結合した場合に重複を除去し昇順に整列する

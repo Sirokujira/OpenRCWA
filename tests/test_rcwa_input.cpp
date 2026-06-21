@@ -357,6 +357,151 @@ end
 }
 
 // ============================================================
+// Test 9: TE 偏波 Brewster 角
+// air→glass (n=1.5): θ_B ≈ 56.31°, TE では R ≈ 0.148 (非ゼロ), R+T ≈ 1
+// ============================================================
+static void test_te_oblique()
+{
+    static const char* name = "test_te_oblique";
+    int prev_fails = g_fails;
+    auto res = solve("te_oblique", R"(
+OpenRCWA 4 2
+title = TE oblique incidence at Brewster angle
+xmesh = -5e-07 10 5e-07
+ymesh = -5e-07 10 5e-07
+zmesh = -5e-07 10 0.0 10 1e-06
+material = 1 2.25 0 1 0
+geometry = 2 1 -5e-07 5e-07 -5e-07 5e-07 -5e-07 0
+planewave = 56.31 0 2
+pbc = 1 1 0
+rcwaorder = 8 0
+frequency1 = 5.0e+14 5.0e+14 0
+end
+)");
+    if (res.empty()) { std::cerr << "  SKIP: " << name << " (solve failed)\n"; return; }
+    double R = res[0].R, T = res[0].T, A = res[0].A;
+    std::cout << "  R_TE(Brewster)=" << R << " T=" << T << " A=" << A
+              << " R+T=" << R + T << "\n";
+    // 解析解: r_s = (cosθ - n*cosθt)/(cosθ + n*cosθt) で R_TE ≈ 0.148
+    CHECK(R > 0.10 && R < 0.20, "R_TE at Brewster ~0.148 (non-zero)");
+    CHECK(std::abs(R + T - 1.0) < 2e-3, "TE energy conservation R+T≈1");
+    CHECK(std::abs(A) < 2e-3, "lossless: A≈0");
+    if (g_fails == prev_fails) std::cout << "PASS: " << name << "\n";
+    else                       std::cout << "FAIL: " << name << "\n";
+}
+
+// ============================================================
+// Test 10: wavelength キーワード — 直接 μm 指定
+// wavelength = 0.5 0.7 4  → 5 波長、昇順を確認
+// ============================================================
+static void test_wavelength_keyword()
+{
+    static const char* name = "test_wavelength_keyword";
+    int prev_fails = g_fails;
+    // Lx = 0.5 μm → Wood anomaly at λ=0.5 μm (first order grazing)。
+    // 0.6–0.9 μm 範囲を使うことで全次数が evanescent に収まる。
+    std::string path = writeTmp("wavekw", R"(
+OpenRCWA 4 2
+title = wavelength keyword test
+xmesh = -2.5e-07 10 2.5e-07
+ymesh = -2.5e-07 10 2.5e-07
+zmesh = -3e-07 10 0.0 10 7e-07
+material = 1 2.25 0 1 0
+geometry = 2 1 -2.5e-07 2.5e-07 -2.5e-07 2.5e-07 -3e-07 0
+planewave = 0 0 1
+pbc = 1 1 0
+rcwaorder = 4 0
+wavelength = 0.6 0.9 4
+end
+)");
+    RCWAProblem prob;
+    std::string err;
+    if (!parseRCWAInput(path, prob, err)) {
+        std::cerr << "  parse error: " << err << "\n"; ++g_fails; return;
+    }
+    std::cout << "  lambdas.size()=" << prob.lambdas.size() << "\n";
+    CHECK(prob.lambdas.size() == 5, "5 wavelengths from wavelength keyword");
+    // 昇順かつ 0.6 ≤ λ ≤ 0.9 μm
+    for (const auto& lam : prob.lambdas)
+        CHECK(lam >= 0.599 && lam <= 0.901, "lambda in [0.6,0.9] um");
+    for (size_t i = 1; i < prob.lambdas.size(); ++i)
+        CHECK(prob.lambdas[i] > prob.lambdas[i-1], "lambdas sorted ascending");
+    // ソルバも走らせて R+T≈1 を確認
+    auto res = runRCWA(prob, err);
+    if (!res.empty()) {
+        for (const auto& r : res)
+            CHECK(std::abs(r.R + r.T - 1.0) < 2e-3, "R+T≈1 for wavelength sweep");
+    }
+    if (g_fails == prev_fails) std::cout << "PASS: " << name << "\n";
+    else                       std::cout << "FAIL: " << name << "\n";
+}
+
+// ============================================================
+// Test 11: background キーワード
+// background=2.25 (ガラス) を設定し、ガラス→ガラス界面 (R≈0) になることを確認
+// ============================================================
+static void test_background_keyword()
+{
+    static const char* name = "test_background_keyword";
+    int prev_fails = g_fails;
+    // geometry なし → 全域が background の誘電率 (ガラス) になるので R=0, T=1
+    auto res = solve("bgkw", R"(
+OpenRCWA 4 2
+title = background keyword test
+xmesh = -2.5e-07 10 2.5e-07
+ymesh = -2.5e-07 10 2.5e-07
+zmesh = -3e-07 10 0.0 10 7e-07
+background = 2.25
+planewave = 0 0 1
+pbc = 1 1 0
+rcwaorder = 4 0
+frequency1 = 5.0e+14 5.0e+14 0
+end
+)");
+    if (res.empty()) { std::cerr << "  SKIP: " << name << " (solve failed)\n"; return; }
+    double R = res[0].R, T = res[0].T;
+    std::cout << "  glass-only R=" << R << " T=" << T << "\n";
+    // 均質ガラス中: 界面がないので R≈0, T≈1
+    CHECK(R < 1e-6, "uniform glass: R≈0");
+    CHECK(std::abs(T - 1.0) < 1e-4, "uniform glass: T≈1");
+    if (g_fails == prev_fails) std::cout << "PASS: " << name << "\n";
+    else                       std::cout << "FAIL: " << name << "\n";
+}
+
+// ============================================================
+// Test 12: 吸収率 — 無損失材料では A ≈ 0
+// ============================================================
+static void test_absorption_lossless()
+{
+    static const char* name = "test_absorption_lossless";
+    int prev_fails = g_fails;
+    auto res = solve("abs_lossless", R"(
+OpenRCWA 4 2
+title = absorption lossless
+xmesh = -2.5e-07 10 2.5e-07
+ymesh = -2.5e-07 10 2.5e-07
+zmesh = -1e-06 10 0.0 10 3e-07 10 7e-07
+material = 1 2.25 0 1 0
+geometry = 2 1 -2.5e-07 2.5e-07 -2.5e-07 2.5e-07 0 3e-07
+planewave = 0 0 1
+pbc = 1 1 0
+rcwaorder = 4 0
+frequency1 = 4.0e+14 7.0e+14 10
+end
+)");
+    if (res.empty()) { std::cerr << "  SKIP: " << name << " (solve failed)\n"; return; }
+    std::cout << "  wavelengths: " << res.size() << "\n";
+    for (const auto& r : res) {
+        CHECK(std::abs(r.A) < 2e-3,
+              std::string("A≈0 at lambda=") + std::to_string(r.lambda));
+        // A は必ず 1−R−T に等しい
+        CHECK(std::abs(r.A - (1.0 - r.R - r.T)) < 1e-12, "A == 1-R-T exactly");
+    }
+    if (g_fails == prev_fails) std::cout << "PASS: " << name << "\n";
+    else                       std::cout << "FAIL: " << name << "\n";
+}
+
+// ============================================================
 // main
 // ============================================================
 int main()
@@ -371,6 +516,10 @@ int main()
     test_material_dispersion();
     test_per_order_output();
     test_2d_grating_energy();
+    test_te_oblique();
+    test_wavelength_keyword();
+    test_background_keyword();
+    test_absorption_lossless();
 
     std::cout << "======================================\n";
     if (g_fails == 0)

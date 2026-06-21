@@ -18,6 +18,7 @@ struct RCWAResult
     scalar lambda;  // 波長 [μm]
     scalar R;       // 反射率 (全回折次数の和)
     scalar T;       // 透過率 (全回折次数の和)
+    scalar A;       // 吸収率 = 1 - R - T (損失ゼロなら ≈ 0)
 
     // 各回折次数の反射率・透過率 (長さ = (2*nHx+1)*(2*nHy+1))
     // 格子: REF_orders[ny*i+j] は (m=i-Nx, n=j-Ny) 次の反射効率

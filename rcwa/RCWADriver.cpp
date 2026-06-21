@@ -136,13 +136,27 @@ std::vector<RCWAResult> runRCWA(const RCWAProblem& prob, std::string& err)
     }
     const int nSlab = static_cast<int>(slabCenter.size());
 
-    // 入射偏波 (面内 E ベクトル方向)。pol=1 -> x 偏波, pol=2 -> y 偏波。
-    const scalar px = (prob.pol == 2) ? 0.0 : 1.0;
-    const scalar py = (prob.pol == 2) ? 1.0 : 0.0;
-
     // 入射角 [rad]
     const scalar thetaRad = prob.theta * Pi / 180.0;
     const scalar phiRad   = prob.phi   * Pi / 180.0;
+
+    // 入射 E 場の横 (xy) 成分ベクトル。単位振幅 (|E_inc_3D|² = 1) に正規化する。
+    //   pol=1 (TM / p 偏波): E は入射面内 → 横成分 = (cosθ·cosφ, cosθ·sinφ)
+    //   pol=2 (TE / s 偏波): E ⊥ 入射面   → 横成分 = (−sinφ, cosφ)
+    // 法線入射 (θ≈0) では TE/TM が縮退するため単純な x/y 方向を使う。
+    scalar px, py;
+    if (std::abs(std::sin(thetaRad)) < 1e-9) {
+        px = (prob.pol == 2) ? 0.0 : 1.0;
+        py = (prob.pol == 2) ? 1.0 : 0.0;
+    } else if (prob.pol == 2) {
+        // TE: E ⊥ 入射面 → (-sinφ, cosφ)、z 成分なし
+        px = -std::sin(phiRad);
+        py =  std::cos(phiRad);
+    } else {
+        // TM: E ∥ 入射面 → 横成分 (cosθ·cosφ, cosθ·sinφ), Ez = −sinθ
+        px = std::cos(thetaRad) * std::cos(phiRad);
+        py = std::cos(thetaRad) * std::sin(phiRad);
+    }
 
     for (scalar lambda : prob.lambdas) {
         try {
@@ -187,6 +201,7 @@ std::vector<RCWAResult> runRCWA(const RCWAProblem& prob, std::string& err)
             r.lambda = lambda;
             r.R = REF.sum();
             r.T = TRN.sum();
+            r.A = 1.0 - r.R - r.T;
             r.REF_orders.assign(REF.data(), REF.data() + REF.size());
             r.TRN_orders.assign(TRN.data(), TRN.data() + TRN.size());
             results.push_back(r);

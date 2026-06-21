@@ -1729,20 +1729,18 @@ void RCWASolver::scatterPlaneWave(
 		Kztrn_r(i) = abs(Kztrn(i).real());
 	}
 
-	// 正規化: 入射波の 3D 電場振幅を基準とする。
-	// px=1, py=0 の場合、入射 3D 電場には z 成分 Ez = -kx0/kzinc が含まれるため、
-	// |E_inc_3D|² = 1 + kx0²/kzinc² + ky0²/kzinc² = n_inc²k0²/kzinc²
-	// (分散関係 kx0²+ky0²+kzinc² = n_inc²k0² を利用)
-	// → ポインティングベクトル: S_z^inc ∝ kzinc * |E_inc_3D|² = n_inc²k0²/kzinc
-	// R(i) = kzref(i)*r_3D(i) / (n_inc²k0²/kzinc) = kzinc*kzref(i)*r_3D(i)/(n_inc²k0²)
+	// 正規化: TE/TM 単位振幅規約 (|E_inc_3D|² = 1) を前提とする。
+	// RCWADriver は (px, py) を単位 3D 振幅のベクトルに設定するため、
+	// 入射ポインティング束 S_z^inc ∝ kzinc * 1 = kzinc (= n_inc·k0·cosθ)。
+	// よって R(i) = kzref(i)*r_3D(i)/kzinc, T(i) = kztrn(i)*t_3D(i)/kzinc。
+	// r_3D(i) = |rx|² + |ry|² + |rz|² は 3D 電場振幅二乗であり、
+	// ガウス則 kx·Ex + ky·Ey + kz·Ez = 0 から得られる rz/tz も含む。
 	const int incOrd = ny_ * (nx_ - 1) / 2 + (ny_ - 1) / 2;
 	const scalar Kzinc = Kzref_r(incOrd);  // = |kz_inc| = n_inc*k0*cos(θ)
 	if (Kzinc < 1e-12 * k0) {
 		std::cerr << "Warning: incident kz is near zero (grazing incidence?)\n";
 		return;
 	}
-	// n_inc²k0² = kx0_² + ky0_² + Kzinc² (dispersion relation)
-	const scalar ninc2k02 = kx0_ * kx0_ + ky0_ * ky0_ + Kzinc * Kzinc;
-	REF = (Kzinc / ninc2k02) * Kzref_r.asDiagonal() * r;
-	TRN = (Kzinc / ninc2k02) * Kztrn_r.asDiagonal() * t;
+	REF = (1.0 / Kzinc) * Kzref_r.asDiagonal() * r;
+	TRN = (1.0 / Kzinc) * Kztrn_r.asDiagonal() * t;
 }

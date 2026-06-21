@@ -85,25 +85,27 @@ int main(int argc, char* argv[])
     std::ofstream fout(outfile);
     fout << std::setprecision(8);
     if (verbose) {
-        // per-order header: lambda, R, T, R+T, R_m=-nHx, ..., R_m=nHx,  T_m=-nHx, ...
-        fout << "# lambda[um], R, T, R+T";
+        // per-order header: lambda, R, T, A, R+T, R_order_0, ..., T_order_N
+        fout << "# lambda[um], R, T, A, R+T";
         for (int i = 0; i < nOrd; ++i) fout << ", R_order_" << i;
         for (int i = 0; i < nOrd; ++i) fout << ", T_order_" << i;
         fout << "\n";
     } else {
-        fout << "# lambda[um], R, T, R+T\n";
+        fout << "# lambda[um], R, T, A, R+T\n";
     }
 
     std::cout << std::setprecision(6);
     for (const auto& r : results) {
-        fout << r.lambda << ", " << r.R << ", " << r.T << ", " << (r.R + r.T);
+        fout << r.lambda << ", " << r.R << ", " << r.T << ", " << r.A
+             << ", " << (r.R + r.T);
         if (verbose) {
             for (scalar v : r.REF_orders) fout << ", " << v;
             for (scalar v : r.TRN_orders) fout << ", " << v;
         }
         fout << "\n";
         std::cout << "  lambda = " << r.lambda << " um   R = " << r.R
-                  << "   T = " << r.T << "   R+T = " << (r.R + r.T) << "\n";
+                  << "   T = " << r.T << "   A = " << r.A
+                  << "   R+T = " << (r.R + r.T) << "\n";
     }
     fout.close();
 
