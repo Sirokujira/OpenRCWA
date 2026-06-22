@@ -17,6 +17,39 @@
 using namespace std;
 using namespace Eigen;
 
+namespace {
+
+// 複素場行列 field を SaveOption に従って実数化し、CSV (行優先) に書き出す。
+//   modulation -> |field|,  realpart -> Re(field),  imagpart -> Im(field)
+// 1 行 = y(または z)スライスの一行、列 = x(または y/z)方向のサンプル点。
+void writeFieldCSV(const std::string& filename,
+                   const Eigen::MatrixXcs& field,
+                   SaveOption opt)
+{
+    std::ofstream fout(filename);
+    if (!fout)
+    {
+        std::cerr << "Cannot open field output file: " << filename << "\n";
+        return;
+    }
+    fout << std::setprecision(8);
+    for (int i = 0; i < field.rows(); ++i)
+    {
+        for (int j = 0; j < field.cols(); ++j)
+        {
+            const scalex v = field(i, j);
+            scalar out = (opt == realpart) ? v.real()
+                       : (opt == imagpart) ? v.imag()
+                       : std::abs(v);  // modulation (既定)
+            fout << out;
+            if (j + 1 < field.cols()) fout << ", ";
+        }
+        fout << "\n";
+    }
+}
+
+} // namespace
+
 
 RCWASolver::~RCWASolver()
 {
@@ -792,44 +825,68 @@ void RCWASolver::saveFieldImage(
 		MatrixXcs eigvecE, eigvecH;
 		layers_[layerType]->permuteEigVecX(eigvecE, eigvecH, tx, nx_, ny_);
 
+		const int nHarm = nx_ * ny_;
+
+		// 横方向成分 (Ex, Ey, Hx, Hy) はモード固有ベクトルから直接取り出す。
+		// 縦方向成分 (Ez, Hz) は Maxwell の回転方程式の z 成分から導出する。
 		if (fieldComponent == Ex || fieldComponent == Ey)
 		{
-
-			//const MatrixXcs& eigvecE = layers_[layerType]->eigvecE();
-			harmonics1D = eigvecE * (u_p + d_m);
+			harmonics1D = eigvecE * (u_p + d_m);  // [Ex; Ey]
+			const int off = (fieldComponent == Ey) ? nHarm : 0;
+			for (int i = 0; i < nx_; ++i)
+				for (int j = 0; j < ny_; ++j)
+					harmonics2d(i, j) = harmonics1D(j + i * ny_ + off);
 		}
 		else if (fieldComponent == Hx || fieldComponent == Hy)
 		{
-			// const MatrixXcs& eigvecH = layers_[layerType]->eigvecH();
-			harmonics1D = eigvecH * (u_p - d_m);
+			harmonics1D = eigvecH * (u_p - d_m);  // [Hx; Hy]
+			const int off = (fieldComponent == Hy) ? nHarm : 0;
+			for (int i = 0; i < nx_; ++i)
+				for (int j = 0; j < ny_; ++j)
+					harmonics2d(i, j) = harmonics1D(j + i * ny_ + off);
+		}
+		else if (fieldComponent == Hz)
+		{
+			// Faraday 則 (μ=1) の z 成分: ∂xEy − ∂yEx = iωμ₀Hz
+			// → Hz = (i/k0²)(kx·Ey − ky·Ex)  (コード内 H 規格化に整合)
+			if (Kx_.size() != nHarm)
+			{
+				std::cerr << "Hz evaluation requires periodic (non-PML) K matrices!\n";
+				return;
+			}
+			VectorXcs E = eigvecE * (u_p + d_m);  // [Ex; Ey]
+			scalar k0 = layers_[layerType]->k0();
+			VectorXcs Hz(nHarm);
+			for (int idx = 0; idx < nHarm; ++idx)
+				Hz(idx) = scalex(0, 1) / (k0 * k0)
+						* (Kx_(idx) * E(idx + nHarm) - Ky_(idx) * E(idx));
+			for (int i = 0; i < nx_; ++i)
+				for (int j = 0; j < ny_; ++j)
+					harmonics2d(i, j) = Hz(j + i * ny_);
+		}
+		else if (fieldComponent == Ez)
+		{
+			// Ampère 則の z 成分: ∂xHy − ∂yHx = −iωε₀ε·Ez
+			// → Ez = i·[[ε]]⁻¹(kx·Hy − ky·Hx)  ([[ε]] = 誘電率畳み込み行列)
+			if (Kx_.size() != nHarm)
+			{
+				std::cerr << "Ez evaluation requires periodic (non-PML) K matrices!\n";
+				return;
+			}
+			VectorXcs H = eigvecH * (u_p - d_m);  // [Hx; Hy]
+			VectorXcs rhs(nHarm);
+			for (int idx = 0; idx < nHarm; ++idx)
+				rhs(idx) = Kx_(idx) * H(idx + nHarm) - Ky_(idx) * H(idx);
+			MatrixXcs fe33 = layers_[layerType]->epsConvolution(nx_, ny_);
+			VectorXcs Ez = scalex(0, 1) * fe33.colPivHouseholderQr().solve(rhs);
+			for (int i = 0; i < nx_; ++i)
+				for (int j = 0; j < ny_; ++j)
+					harmonics2d(i, j) = Ez(j + i * ny_);
 		}
 		else
 		{
 			std::cerr << "Evaluation for this component is not implemented!\n";
 			return;
-		}
-
-		for (int i = 0; i < nx_; ++i)
-		{
-			for (int j = 0; j < ny_; ++j)
-			{
-				if (fieldComponent == Ex || 
-					fieldComponent == Hx)
-				{
-					harmonics2d(i, j) = harmonics1D(j + i * ny_);
-				}
-				else if (fieldComponent == Ey ||
-						 fieldComponent == Hy)
-				{
-					harmonics2d(i, j) = harmonics1D(j + i * ny_ + nx_ * ny_);
-				}
-				else 
-				{
-					std::cerr << "Evaluation for this component is not implemented!\n";
-					return;					
-				}
-				
-			}
 		}
 	};
 
@@ -931,9 +988,8 @@ void RCWASolver::saveFieldImage(
 		}
 	}
 
-	// MatrixVisualizer vis(field);
-	// vis.setXTimes(1);
-	// vis.save(filename, realpart);	
+	// 計算した場 (Ex/Ey/Ez/Hx/Hy/Hz いずれか) を CSV に書き出す。
+	writeFieldCSV(filename, field, opt);
 }
 
 void RCWASolver::saveFieldImage(const std::string& filename,
@@ -1056,44 +1112,68 @@ void RCWASolver::saveFieldImage(const std::string& filename,
 		MatrixXcs eigvecE, eigvecH;
 		layers_[layerType]->permuteEigVecX(eigvecE, eigvecH, tx, nx_, ny_);
 
+		const int nHarm = nx_ * ny_;
+
+		// 横方向成分 (Ex, Ey, Hx, Hy) はモード固有ベクトルから直接取り出す。
+		// 縦方向成分 (Ez, Hz) は Maxwell の回転方程式の z 成分から導出する。
 		if (fieldComponent == Ex || fieldComponent == Ey)
 		{
-
-			//const MatrixXcs& eigvecE = layers_[layerType]->eigvecE();
-			harmonics1D = eigvecE * (u_p + d_m);
+			harmonics1D = eigvecE * (u_p + d_m);  // [Ex; Ey]
+			const int off = (fieldComponent == Ey) ? nHarm : 0;
+			for (int i = 0; i < nx_; ++i)
+				for (int j = 0; j < ny_; ++j)
+					harmonics2d(i, j) = harmonics1D(j + i * ny_ + off);
 		}
 		else if (fieldComponent == Hx || fieldComponent == Hy)
 		{
-			// const MatrixXcs& eigvecH = layers_[layerType]->eigvecH();
-			harmonics1D = eigvecH * (u_p - d_m);
+			harmonics1D = eigvecH * (u_p - d_m);  // [Hx; Hy]
+			const int off = (fieldComponent == Hy) ? nHarm : 0;
+			for (int i = 0; i < nx_; ++i)
+				for (int j = 0; j < ny_; ++j)
+					harmonics2d(i, j) = harmonics1D(j + i * ny_ + off);
+		}
+		else if (fieldComponent == Hz)
+		{
+			// Faraday 則 (μ=1) の z 成分: ∂xEy − ∂yEx = iωμ₀Hz
+			// → Hz = (i/k0²)(kx·Ey − ky·Ex)  (コード内 H 規格化に整合)
+			if (Kx_.size() != nHarm)
+			{
+				std::cerr << "Hz evaluation requires periodic (non-PML) K matrices!\n";
+				return;
+			}
+			VectorXcs E = eigvecE * (u_p + d_m);  // [Ex; Ey]
+			scalar k0 = layers_[layerType]->k0();
+			VectorXcs Hz(nHarm);
+			for (int idx = 0; idx < nHarm; ++idx)
+				Hz(idx) = scalex(0, 1) / (k0 * k0)
+						* (Kx_(idx) * E(idx + nHarm) - Ky_(idx) * E(idx));
+			for (int i = 0; i < nx_; ++i)
+				for (int j = 0; j < ny_; ++j)
+					harmonics2d(i, j) = Hz(j + i * ny_);
+		}
+		else if (fieldComponent == Ez)
+		{
+			// Ampère 則の z 成分: ∂xHy − ∂yHx = −iωε₀ε·Ez
+			// → Ez = i·[[ε]]⁻¹(kx·Hy − ky·Hx)  ([[ε]] = 誘電率畳み込み行列)
+			if (Kx_.size() != nHarm)
+			{
+				std::cerr << "Ez evaluation requires periodic (non-PML) K matrices!\n";
+				return;
+			}
+			VectorXcs H = eigvecH * (u_p - d_m);  // [Hx; Hy]
+			VectorXcs rhs(nHarm);
+			for (int idx = 0; idx < nHarm; ++idx)
+				rhs(idx) = Kx_(idx) * H(idx + nHarm) - Ky_(idx) * H(idx);
+			MatrixXcs fe33 = layers_[layerType]->epsConvolution(nx_, ny_);
+			VectorXcs Ez = scalex(0, 1) * fe33.colPivHouseholderQr().solve(rhs);
+			for (int i = 0; i < nx_; ++i)
+				for (int j = 0; j < ny_; ++j)
+					harmonics2d(i, j) = Ez(j + i * ny_);
 		}
 		else
 		{
 			std::cerr << "Evaluation for this component is not implemented!\n";
 			return;
-		}
-
-		for (int i = 0; i < nx_; ++i)
-		{
-			for (int j = 0; j < ny_; ++j)
-			{
-				if (fieldComponent == Ex || 
-					fieldComponent == Hx)
-				{
-					harmonics2d(i, j) = harmonics1D(j + i * ny_);
-				}
-				else if (fieldComponent == Ey ||
-						 fieldComponent == Hy)
-				{
-					harmonics2d(i, j) = harmonics1D(j + i * ny_ + nx_ * ny_);
-				}
-				else 
-				{
-					std::cerr << "Evaluation for this component is not implemented!\n";
-					return;					
-				}
-				
-			}
 		}
 	};
 
@@ -1196,9 +1276,8 @@ void RCWASolver::saveFieldImage(const std::string& filename,
 	}
 
 
-	// MatrixVisualizer vis(field);
-	// vis.setXTimes(1);
-	// vis.save(filename, realpart);
+	// 計算した場 (Ex/Ey/Ez/Hx/Hy/Hz いずれか) を CSV に書き出す。
+	writeFieldCSV(filename, field, opt);
 }
 
 

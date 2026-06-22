@@ -21,13 +21,23 @@ private:
 	Eigen::MatrixXcs eigvecH_;
 	Eigen::VectorXcs gamma_;
 
+	scalar lambda_ = 0;  // 直近の solve() で用いた波長 (k0 の復元用)
+
 public:
 	Layer(const Eigen::VectorXs& coordX,
 		const Eigen::VectorXs& coordY,
 		const Eigen::MatrixXcs& eps);
-	
+
 	const Eigen::MatrixXcs& eps() const { return eps_; }
 	scalex eps(scalar x, scalar y) const;
+
+	// solve() 時に設定された波長と対応する真空波数 k0 = 2π/λ。
+	scalar lambda() const { return lambda_; }
+	scalar k0() const { return 2 * Pi / lambda_; }
+
+	// 誘電率の畳み込み行列 [[ε]] (ContinuousXY 規則, サイズ nx*ny × nx*ny)。
+	// 縦方向成分 Ez = i·[[ε]]⁻¹(kx·Hy − ky·Hx) の評価に用いる。
+	Eigen::MatrixXcs epsConvolution(int nx, int ny) const;
 	
 	scalar Lx() const { return coordX_[nCx_-1] - coordX_[0]; }
 	scalar Ly() const { return coordY_[nCy_-1] - coordY_[0]; }

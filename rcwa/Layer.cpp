@@ -176,17 +176,28 @@ void Layer::solve(const Eigen::MatrixXcs& Kx,
 	int nx, int ny)
 {
 	scalar k0 = 2 * Pi / lambda;
-    
+
     MatrixXcs F, G;
     waveEqnCoeff(Kx, Ky, lambda, nx, ny, F, G);
-    
-    
+
+
     WaveEquationSolver solver;
     MatrixXcs FG;
     solver.solve(lambda, F, G, FG, eigvecE_, eigvecH_, gamma_);
     gamma_ *= 1./ k0;
 
+	lambda_ = lambda;
 	isSolved_ = true;
+}
+
+Eigen::MatrixXcs Layer::epsConvolution(int nx, int ny) const
+{
+	// waveEqnCoeff の fe33 と同じ ContinuousXY 規則による誘電率の畳み込み行列。
+	// Ez = i·[[ε]]⁻¹(kx·Hy − ky·Hx) で用いるため再計算する。
+	FourierSolver2D e33Solver(coordX_, coordY_);
+	MatrixXcs fe33;
+	e33Solver.solve(eps_, nx, ny, ContinuousXY, fe33);
+	return fe33;
 }
 
 

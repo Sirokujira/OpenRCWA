@@ -15,13 +15,18 @@
 #include <cmath>
 #include <cstdlib>
 #include <fstream>
+#include <sstream>
 #include <iostream>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
+#include <Eigen/Core>
+
 #include "rcwa/RCWAInput.h"
 #include "rcwa/RCWADriver.h"
+#include "rcwa/RCWASolver.h"
+#include "rcwa/Layer.h"
 
 // ============================================================
 // ヘルパー
@@ -502,6 +507,121 @@ end
 }
 
 // ============================================================
+// Test 13: 縦方向 (Ez, Hz) 場の評価
+//   一様な (xy 一定) 層スタックでは基本回折次数のみ励起されるため、
+//   Maxwell の z 成分から導かれる Ez / Hz に明確な解析的性質がある:
+//     - 法線入射 (kx0=0):        Ez ≈ 0, Hz ≈ 0
+//     - 斜め入射 TM (x 偏波,φ=0): Ez ≠ 0, Hz ≈ 0
+//     - 斜め入射 TE (y 偏波,φ=0): Hz ≠ 0, Ez ≈ 0
+//   saveFieldImage が出力する CSV の最大振幅でこれらを検証する。
+// ============================================================
+
+// 一様 (単一セル) レイヤ。周期 Lx×Ly, 誘電率 eps。
+static Layer makeUniformLayer(double eps, double Lx, double Ly)
+{
+    Eigen::VectorXs cx(2), cy(2);
+    cx << -Lx / 2, Lx / 2;
+    cy << -Ly / 2, Ly / 2;
+    Eigen::MatrixXcs e(1, 1);
+    e(0, 0) = scalex(eps, 0.0);
+    return Layer(cx, cy, e);
+}
+
+// CSV 内の全数値の絶対値の最大を返す (非有限なら巨大値を返す)。
+static double csvMaxAbs(const std::string& path)
+{
+    std::ifstream f(path);
+    if (!f) return -1.0;
+    double mx = 0.0;
+    std::string line;
+    while (std::getline(f, line)) {
+        std::stringstream ss(line);
+        std::string tok;
+        while (std::getline(ss, tok, ',')) {
+            try {
+                double v = std::stod(tok);
+                if (!std::isfinite(v)) return 1e300;
+                v = std::fabs(v);
+                if (v > mx) mx = v;
+            } catch (...) { /* 空トークンは無視 */ }
+        }
+    }
+    return mx;
+}
+
+// 空気/ガラス/空気の一様スタックを解き、Ez/Hz の最大振幅を返す。
+static void runFieldCase(double thetaDeg, int pol, double& ezMax, double& hzMax)
+{
+    const double lambda = 0.6, Lx = 0.5, Ly = 0.5, slab = 0.3;
+    const int nHx = 4;
+
+    RCWASolver solver(nHx, 0);
+    solver.disablePML();
+    solver.addLayer(makeUniformLayer(1.0,  Lx, Ly));  // 0: 入射側 (空気)
+    solver.addLayer(makeUniformLayer(2.25, Lx, Ly));  // 1: スラブ (ガラス)
+    solver.addLayer(makeUniformLayer(1.0,  Lx, Ly));  // 2: 透過側 (空気)
+
+    const double k0 = 2.0 * Pi / lambda;
+    const double theta = thetaDeg * Pi / 180.0;
+    solver.setBlochWavevector(k0 * std::sin(theta), 0.0);  // φ=0
+
+    std::vector<int> stack{0, 1, 2};
+    std::vector<scalar> thick{0.0, slab, 0.0};
+    solver.solve(lambda, stack, thick);
+
+    // 入射平面波を生成: x 偏波 (px=1) は φ=0 で TM, y 偏波 (py=1) は TE。
+    // generateHorizontalPlaneWave はハーモニクス空間の単一次数 (m=n=0) を
+    // 固有モード係数 cInc に変換する。これを inputCoeffs として渡すことで
+    // 正しい平面波励起になる (固有モード添字を直接指定すると縮退 ±Kx が
+    // 混ざり平面波にならない)。
+    const scalar px = (pol == 2) ? 0.0 : 1.0;
+    const scalar py = (pol == 2) ? 1.0 : 0.0;
+    Eigen::VectorXcs cInc;
+    solver.generateHorizontalPlaneWave(px, py, 0, cInc);
+
+    std::vector<std::pair<int, scalex>> inputCoeffs;
+    for (int i = 0; i < cInc.size(); ++i)
+        if (std::abs(cInc(i)) > 1e-14)
+            inputCoeffs.emplace_back(i, cInc(i));
+
+    solver.saveFieldImage("/tmp/rcwa_ez.csv", sliceXZ, 0.0, Ez, modulation,
+                          inputCoeffs, stack, thick);
+    solver.saveFieldImage("/tmp/rcwa_hz.csv", sliceXZ, 0.0, Hz, modulation,
+                          inputCoeffs, stack, thick);
+
+    ezMax = csvMaxAbs("/tmp/rcwa_ez.csv");
+    hzMax = csvMaxAbs("/tmp/rcwa_hz.csv");
+}
+
+static void test_longitudinal_fields()
+{
+    static const char* name = "test_longitudinal_fields";
+    int prev_fails = g_fails;
+    double ez = 0, hz = 0;
+
+    // (1) 法線入射 x 偏波: Ez ≈ 0, Hz ≈ 0
+    runFieldCase(0.0, 1, ez, hz);
+    std::cout << "  normal  x-pol: Ez_max=" << ez << " Hz_max=" << hz << "\n";
+    CHECK(ez >= 0.0 && ez < 1e-6, "normal incidence: Ez≈0");
+    CHECK(hz >= 0.0 && hz < 1e-6, "normal incidence: Hz≈0");
+
+    // (2) 斜め入射 TM (x 偏波): Ez ≠ 0, Hz ≈ 0
+    runFieldCase(30.0, 1, ez, hz);
+    std::cout << "  oblique TM   : Ez_max=" << ez << " Hz_max=" << hz << "\n";
+    CHECK(ez > 1e-3, "oblique TM: Ez nonzero (longitudinal E present)");
+    CHECK(hz >= 0.0 && hz < 1e-6, "oblique TM: Hz≈0");
+
+    // (3) 斜め入射 TE (y 偏波): Hz ≠ 0, Ez ≈ 0
+    runFieldCase(30.0, 2, ez, hz);
+    std::cout << "  oblique TE   : Ez_max=" << ez << " Hz_max=" << hz << "\n";
+    CHECK(hz > 1e-3, "oblique TE: Hz nonzero (longitudinal H present)");
+    CHECK(ez >= 0.0 && ez < 1e-6, "oblique TE: Ez≈0");
+
+    if (g_fails == prev_fails) std::cout << "PASS: " << name << "\n";
+    else                       std::cout << "FAIL: " << name << "\n";
+}
+
+// ============================================================
 // main
 // ============================================================
 int main()
@@ -520,6 +640,7 @@ int main()
     test_wavelength_keyword();
     test_background_keyword();
     test_absorption_lossless();
+    test_longitudinal_fields();
 
     std::cout << "======================================\n";
     if (g_fails == 0)
