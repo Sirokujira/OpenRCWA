@@ -10,6 +10,11 @@
 //   6. material_dispersion パース確認
 //   7. 回折次数別出力: sum(REF_orders)≡R, sum(TRN_orders)≡T
 //   8. 2D 格子 (nHy=1): エネルギー保存
+//   9-13. TE 斜め入射 / wavelength / background / 吸収 / 縦方向場
+//   14. TM/TE Fresnel 角度スイープ (解析解比較)
+//   15. φ 回転不変性 (TM Brewster, TE @ φ=0/45/90)
+//   16. 法線入射 TM/TE 縮退
+//   17. コニカルマウント 1D 格子のエネルギー保存
 // ============================================================
 #include <cassert>
 #include <cmath>
@@ -622,6 +627,194 @@ static void test_longitudinal_fields()
 }
 
 // ============================================================
+// TM/TE 偏波テスト用ヘルパー
+// ============================================================
+
+// Fresnel 反射率の解析解 (入射側 n1=1, 透過側 n)。
+// pol=1: TM (p 偏波), pol=2: TE (s 偏波)。
+static double fresnelR(double thetaDeg, double n, int pol)
+{
+    const double th  = thetaDeg * M_PI / 180.0;
+    const double ct  = std::cos(th);
+    const double st  = std::sin(th);
+    const double ctt = std::sqrt(1.0 - (st / n) * (st / n));  // cosθt
+    double r;
+    if (pol == 2)  // TE: r_s = (cosθ − n·cosθt)/(cosθ + n·cosθt)
+        r = (ct - n * ctt) / (ct + n * ctt);
+    else           // TM: r_p = (n·cosθ − cosθt)/(n·cosθ + cosθt)
+        r = (n * ct - ctt) / (n * ct + ctt);
+    return r * r;
+}
+
+// air→glass 半無限界面の .orcwa を theta/phi/pol を差し替えて生成する。
+static std::string makeInterfaceInput(double thetaDeg, double phiDeg, int pol)
+{
+    std::ostringstream os;
+    os << "OpenRCWA 4 2\n"
+          "title = TM/TE interface test\n"
+          "xmesh = -5e-07 10 5e-07\n"
+          "ymesh = -5e-07 10 5e-07\n"
+          "zmesh = -5e-07 10 0.0 10 1e-06\n"
+          "material = 1 2.25 0 1 0\n"
+          "geometry = 2 1 -5e-07 5e-07 -5e-07 5e-07 -5e-07 0\n"
+          "planewave = " << thetaDeg << " " << phiDeg << " " << pol << "\n"
+          "pbc = 1 1 0\n"
+          "rcwaorder = 4 2\n"
+          "frequency1 = 5.0e+14 5.0e+14 0\n"
+          "end\n";
+    return os.str();
+}
+
+// ============================================================
+// Test 14: TM/TE Fresnel 角度スイープ (φ=0)
+// θ = 20°, 40°, 60° で R_TM / R_TE が解析解と一致することを確認
+// ============================================================
+static void test_tm_te_fresnel_sweep()
+{
+    static const char* name = "test_tm_te_fresnel_sweep";
+    int prev_fails = g_fails;
+    const double n = 1.5;
+    const double angles[] = {20.0, 40.0, 60.0};
+
+    for (double th : angles) {
+        for (int pol = 1; pol <= 2; ++pol) {
+            std::string tag = std::string("fresnel_sweep_") +
+                              std::to_string(int(th)) + "_" + std::to_string(pol);
+            auto res = solve(tag, makeInterfaceInput(th, 0.0, pol));
+            if (res.empty()) {
+                std::cerr << "  FAIL: solve failed at theta=" << th
+                          << " pol=" << pol << "\n";
+                ++g_fails;
+                continue;
+            }
+            double R = res[0].R, T = res[0].T;
+            double Rref = fresnelR(th, n, pol);
+            std::cout << "  theta=" << th << (pol == 2 ? " TE" : " TM")
+                      << ": R=" << R << " (analytic " << Rref << ")"
+                      << " R+T=" << R + T << "\n";
+            CHECK(std::abs(R - Rref) < 2e-3,
+                  std::string("R matches Fresnel at theta=") + std::to_string(th)
+                  + " pol=" + std::to_string(pol));
+            CHECK(std::abs(R + T - 1.0) < 2e-3,
+                  std::string("R+T≈1 at theta=") + std::to_string(th)
+                  + " pol=" + std::to_string(pol));
+        }
+    }
+    if (g_fails == prev_fails) std::cout << "PASS: " << name << "\n";
+    else                       std::cout << "FAIL: " << name << "\n";
+}
+
+// ============================================================
+// Test 15: φ 回転不変性
+// 一様界面では結果は方位角 φ に依存しない:
+//   - TM at Brewster: φ=0/45/90 すべてで R≈0
+//   - TE at Brewster 角: φ=0/45/90 すべてで R≈0.148
+// 偏波回転 (px,py) と Bloch 波数 (kx0,ky0) の両方が φ を正しく
+// 扱っていなければ通らない。
+// ============================================================
+static void test_phi_rotation_invariance()
+{
+    static const char* name = "test_phi_rotation_invariance";
+    int prev_fails = g_fails;
+    const double thB = 56.31;  // Brewster 角 arctan(1.5)
+    const double n = 1.5;
+    const double R_TE_ref = fresnelR(thB, n, 2);  // ≈0.148
+    const double phis[] = {0.0, 45.0, 90.0};
+
+    for (double phi : phis) {
+        // TM: Brewster 角で R≈0
+        {
+            std::string tag = std::string("phi_tm_") + std::to_string(int(phi));
+            auto res = solve(tag, makeInterfaceInput(thB, phi, 1));
+            if (res.empty()) { std::cerr << "  FAIL: TM solve phi=" << phi << "\n"; ++g_fails; continue; }
+            double R = res[0].R, T = res[0].T;
+            std::cout << "  phi=" << phi << " TM: R=" << R << " R+T=" << R + T << "\n";
+            CHECK(R < 0.01, std::string("R_TM≈0 at Brewster, phi=") + std::to_string(phi));
+            CHECK(std::abs(R + T - 1.0) < 2e-3,
+                  std::string("TM energy conservation, phi=") + std::to_string(phi));
+        }
+        // TE: 同角度で R≈0.148
+        {
+            std::string tag = std::string("phi_te_") + std::to_string(int(phi));
+            auto res = solve(tag, makeInterfaceInput(thB, phi, 2));
+            if (res.empty()) { std::cerr << "  FAIL: TE solve phi=" << phi << "\n"; ++g_fails; continue; }
+            double R = res[0].R, T = res[0].T;
+            std::cout << "  phi=" << phi << " TE: R=" << R
+                      << " (analytic " << R_TE_ref << ") R+T=" << R + T << "\n";
+            CHECK(std::abs(R - R_TE_ref) < 2e-3,
+                  std::string("R_TE matches Fresnel, phi=") + std::to_string(phi));
+            CHECK(std::abs(R + T - 1.0) < 2e-3,
+                  std::string("TE energy conservation, phi=") + std::to_string(phi));
+        }
+    }
+    if (g_fails == prev_fails) std::cout << "PASS: " << name << "\n";
+    else                       std::cout << "FAIL: " << name << "\n";
+}
+
+// ============================================================
+// Test 16: 法線入射での TM/TE 縮退
+// θ=0 では偏波の区別がなく、R は pol=1/2 で厳密に一致するはず
+// (等方一様スラブなので偏波依存性なし)。
+// ============================================================
+static void test_normal_incidence_pol_degeneracy()
+{
+    static const char* name = "test_normal_incidence_pol_degeneracy";
+    int prev_fails = g_fails;
+
+    auto resTM = solve("normal_tm", makeInterfaceInput(0.0, 0.0, 1));
+    auto resTE = solve("normal_te", makeInterfaceInput(0.0, 0.0, 2));
+    if (resTM.empty() || resTE.empty()) {
+        std::cerr << "  FAIL: solve failed\n"; ++g_fails; return;
+    }
+    double R1 = resTM[0].R, R2 = resTE[0].R;
+    std::cout << "  normal incidence: R_TM=" << R1 << " R_TE=" << R2 << "\n";
+    CHECK(std::abs(R1 - R2) < 1e-10, "R identical for pol=1/2 at normal incidence");
+    CHECK(std::abs(R1 - 0.04) < 2e-3, "R matches Fresnel 0.04");
+    if (g_fails == prev_fails) std::cout << "PASS: " << name << "\n";
+    else                       std::cout << "FAIL: " << name << "\n";
+}
+
+// ============================================================
+// Test 17: コニカルマウント 1D 格子 — TM/TE エネルギー保存
+// θ=30°, φ=30° (入射面が格子溝に対して斜め) では TM/TE が
+// 回折で混合する。無損失なので R+T≈1 が成立するはず。
+// ============================================================
+static void test_conical_grating()
+{
+    static const char* name = "test_conical_grating";
+    int prev_fails = g_fails;
+
+    for (int pol = 1; pol <= 2; ++pol) {
+        std::ostringstream os;
+        os << "OpenRCWA 4 2\n"
+              "title = conical mount grating\n"
+              "xmesh = -2.5e-07 10 2.5e-07\n"
+              "ymesh = -2.5e-07 10 2.5e-07\n"
+              // 空気 / 格子層 / 空気 (透過側は一様スラブが必要)
+              "zmesh = -7e-07 10 -3e-07 10 0.0 10 7e-07\n"
+              "material = 1 2.25 0 1 0\n"
+              // x 方向半周期のみガラス → 1D 格子
+              "geometry = 2 1 -2.5e-07 0.0 -2.5e-07 2.5e-07 -3e-07 0\n"
+              "planewave = 30 30 " << pol << "\n"
+              "pbc = 1 1 0\n"
+              "rcwaorder = 4 2\n"
+              "frequency1 = 5.0e+14 5.0e+14 0\n"
+              "end\n";
+        std::string tag = std::string("conical_") + std::to_string(pol);
+        auto res = solve(tag, os.str());
+        if (res.empty()) { std::cerr << "  FAIL: solve failed pol=" << pol << "\n"; ++g_fails; continue; }
+        double R = res[0].R, T = res[0].T;
+        std::cout << "  conical " << (pol == 2 ? "TE" : "TM")
+                  << ": R=" << R << " T=" << T << " R+T=" << R + T << "\n";
+        CHECK(R > 0.0 && T > 0.0, "R and T positive");
+        CHECK(std::abs(R + T - 1.0) < 2e-3,
+              std::string("conical grating energy conservation pol=") + std::to_string(pol));
+    }
+    if (g_fails == prev_fails) std::cout << "PASS: " << name << "\n";
+    else                       std::cout << "FAIL: " << name << "\n";
+}
+
+// ============================================================
 // main
 // ============================================================
 int main()
@@ -641,6 +834,10 @@ int main()
     test_background_keyword();
     test_absorption_lossless();
     test_longitudinal_fields();
+    test_tm_te_fresnel_sweep();
+    test_phi_rotation_invariance();
+    test_normal_incidence_pol_degeneracy();
+    test_conical_grating();
 
     std::cout << "======================================\n";
     if (g_fails == 0)
