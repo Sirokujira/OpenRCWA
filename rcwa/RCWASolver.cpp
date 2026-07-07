@@ -924,7 +924,7 @@ void RCWASolver::saveFieldImage(
 					waveletY(n+maxY) = exp(scalex(0, 2. * Pi * n / L2 * y));
 				}
 
-				field(i, j) = waveletX.transpose() * harmonics2D * waveletY;
+				field(i, j) = (waveletX.transpose() * harmonics2D * waveletY).eval()(0, 0);
 			}
 		}
 	}
@@ -1188,7 +1188,7 @@ void RCWASolver::saveFieldImage(const std::string& filename,
 					waveletY(n+maxY) = exp(scalex(0, 2. * Pi * n / L2 * y));
 				}
 
-				field(i, j) = waveletX.transpose() * harmonics2D * waveletY;
+				field(i, j) = (waveletX.transpose() * harmonics2D * waveletY).eval()(0, 0);
 			}
 		}
 	}
