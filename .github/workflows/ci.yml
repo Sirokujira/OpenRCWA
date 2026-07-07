@@ -1,0 +1,74 @@
+# OpenRCWA (処理ロジック) CI — CPU 版ソルバーのビルド + サンプルのスモーク実行。
+# CUDA/MPI/MKL/TBB はランナーに無くてもビルド可能 (optional 化済み)。
+# RCWA コア (rcwa/*.cpp, MKL 必須) のビルド検証は MKL 導入後に拡張する。
+name: CI
+
+on:
+  push:
+    branches: [ main, "claude/**" ]
+    tags: [ "v*" ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-cpu:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write   # タグ push 時の Release 添付に使用
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          # LAPACK/LAPACKE/Eigen は MKL 非搭載環境での RCWA コアのフォールバックに必要
+          sudo apt-get install -y cmake gcc g++ libhdf5-dev \
+            liblapack-dev liblapacke-dev libeigen3-dev
+
+      - name: Configure (CPU only)
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DWITH_CUDA=OFF -DWITH_MPI=OFF
+
+      - name: Build orcwa / orcwa_post
+        run: cmake --build build -j"$(nproc)"
+
+      - name: Smoke test — solver (dipole sample)
+        run: |
+          mkdir -p /tmp/smoke && cp data/sample/dipole.ofd /tmp/smoke/
+          cd /tmp/smoke
+          "$GITHUB_WORKSPACE/bin/orcwa" -n 2 dipole.ofd
+          grep -q "normal end" orcwa.log
+          test -s orcwa.out
+
+      - name: Smoke test — post processor
+        run: |
+          cd /tmp/smoke
+          "$GITHUB_WORKSPACE/bin/orcwa_post" -n 2 dipole.ofd
+
+      - name: Upload binaries (artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: orcwa-linux-x64
+          path: |
+            bin/orcwa
+            bin/orcwa_post
+
+      # タグ (v*) push 時は Release にバイナリを添付する。
+      # OpenFDTD-X (GUI) や統合テストはここから取得できる (公開リポジトリ)。
+      - name: Package for release
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: tar czf orcwa-linux-x64.tar.gz -C bin orcwa orcwa_post
+
+      - name: Attach binaries to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: orcwa-linux-x64.tar.gz
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-logs
+          path: /tmp/smoke/*.log
+          if-no-files-found: ignore
