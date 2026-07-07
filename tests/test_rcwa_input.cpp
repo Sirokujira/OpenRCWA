@@ -15,6 +15,12 @@
 //   15. φ 回転不変性 (TM Brewster, TE @ φ=0/45/90)
 //   16. 法線入射 TM/TE 縮退
 //   17. コニカルマウント 1D 格子のエネルギー保存
+//   18. 損失材料 (σ>0): A>0, R+T<1
+//   19. Drude 分散の物理: 金属スラブの高反射
+//   20. パースエラー処理 + wavelength 単一値形式
+//   21. CYL_X/CYL_Y containsXY + deriveZEdges
+//   22. 横方向場成分 (Ex/Ey/Hx/Hy) の偏波選択則
+//   23. SaveOption 整合性: |f|² == Re² + Im²
 // ============================================================
 #include <cassert>
 #include <cmath>
@@ -815,6 +821,334 @@ static void test_conical_grating()
 }
 
 // ============================================================
+// Test 18: 損失材料 (導電率 σ>0) — 吸収 A>0, R+T<1
+// σ=1e4 S/m, ω=2π·5e14 → Δε_im = σ/(ωε₀) ≈ 0.36
+// n ≈ 1.5 − 0.12i, 0.3 μm スラブで有意な吸収が生じる。
+// ============================================================
+static void test_absorption_lossy()
+{
+    static const char* name = "test_absorption_lossy";
+    int prev_fails = g_fails;
+    auto res = solve("abs_lossy", R"(
+OpenRCWA 4 2
+title = absorption lossy slab
+xmesh = -2.5e-07 10 2.5e-07
+ymesh = -2.5e-07 10 2.5e-07
+zmesh = -1e-06 10 0.0 10 3e-07 10 7e-07
+material = 1 2.25 1.0e4 1 0
+geometry = 2 1 -2.5e-07 2.5e-07 -2.5e-07 2.5e-07 0 3e-07
+planewave = 0 0 1
+pbc = 1 1 0
+rcwaorder = 4 0
+frequency1 = 5.0e+14 5.0e+14 0
+end
+)");
+    if (res.empty()) { std::cerr << "  SKIP: " << name << " (solve failed)\n"; return; }
+    double R = res[0].R, T = res[0].T, A = res[0].A;
+    std::cout << "  lossy slab: R=" << R << " T=" << T << " A=" << A << "\n";
+    CHECK(A > 0.1, "conductive slab absorbs (A > 0.1)");
+    CHECK(R + T < 1.0 - 1e-3, "R+T < 1 for lossy material");
+    CHECK(std::abs(A - (1.0 - R - T)) < 1e-12, "A == 1-R-T exactly");
+    CHECK(R >= 0.0 && T >= 0.0 && A <= 1.0, "R, T, A physically bounded");
+    if (g_fails == prev_fails) std::cout << "PASS: " << name << "\n";
+    else                       std::cout << "FAIL: " << name << "\n";
+}
+
+// ============================================================
+// Test 19: Drude 分散の物理 — 金属スラブの高反射
+// eps(ω) = 1 − ωp²/(ω² + iγω), ωp=1.37e16, γ=2.73e13 (銀近似)
+// λ≈0.6 μm で eps ≈ −18 → 0.3 μm スラブは不透明で R が高い。
+// (Test 6 はパースのみ確認; ここでは solve への反映を検証する)
+// ============================================================
+static void test_drude_metal_reflectance()
+{
+    static const char* name = "test_drude_metal_reflectance";
+    int prev_fails = g_fails;
+    auto res = solve("drude_metal", R"(
+OpenRCWA 4 2
+title = Drude metal slab
+xmesh = -2.5e-07 10 2.5e-07
+ymesh = -2.5e-07 10 2.5e-07
+zmesh = -1e-06 10 0.0 10 3e-07 10 7e-07
+material = 1 2.25 0 1 0
+material_dispersion = 2 1.0 1.37e16 2.73e13 0.0
+geometry = 2 1 -2.5e-07 2.5e-07 -2.5e-07 2.5e-07 0 3e-07
+planewave = 0 0 1
+pbc = 1 1 0
+rcwaorder = 4 0
+frequency1 = 5.0e+14 5.0e+14 0
+end
+)");
+    if (res.empty()) { std::cerr << "  SKIP: " << name << " (solve failed)\n"; return; }
+    double R = res[0].R, T = res[0].T, A = res[0].A;
+    std::cout << "  Drude metal: R=" << R << " T=" << T << " A=" << A << "\n";
+    CHECK(R > 0.8, "metallic slab is highly reflective (R > 0.8)");
+    CHECK(T < 0.01, "0.3 um metal slab is opaque (T < 0.01)");
+    CHECK(A > 0.0 && A < 0.2, "small ohmic absorption (0 < A < 0.2)");
+    if (g_fails == prev_fails) std::cout << "PASS: " << name << "\n";
+    else                       std::cout << "FAIL: " << name << "\n";
+}
+
+// ============================================================
+// Test 20: パースエラー処理 + wavelength 単一値形式
+//   (a) 波長未指定 → parseRCWAInput が false を返しエラーを設定
+//   (b) 不正ヘッダ → false
+//   (c) wavelength = 0.6 (単一値) → 1 波長
+// ============================================================
+static void test_parse_errors()
+{
+    static const char* name = "test_parse_errors";
+    int prev_fails = g_fails;
+    RCWAProblem prob;
+    std::string err;
+
+    // (a) 波長キーワードなし
+    {
+        std::string path = writeTmp("err_nowave", R"(
+OpenRCWA 4 2
+title = no wavelength
+xmesh = -2.5e-07 10 2.5e-07
+ymesh = -2.5e-07 10 2.5e-07
+zmesh = -3e-07 10 0.0 10 7e-07
+planewave = 0 0 1
+end
+)");
+        RCWAProblem p;
+        bool ok = parseRCWAInput(path, p, err);
+        std::cout << "  no-wavelength: ok=" << ok << " err=\"" << err << "\"\n";
+        CHECK(!ok, "missing wavelengths rejected");
+        CHECK(!err.empty(), "error message set for missing wavelengths");
+    }
+
+    // (b) 不正ヘッダ
+    {
+        std::string path = writeTmp("err_header", R"(
+NotOpenRCWA 4 2
+end
+)");
+        RCWAProblem p;
+        err.clear();
+        bool ok = parseRCWAInput(path, p, err);
+        std::cout << "  bad-header: ok=" << ok << " err=\"" << err << "\"\n";
+        CHECK(!ok, "bad header rejected");
+        CHECK(!err.empty(), "error message set for bad header");
+    }
+
+    // (c) wavelength 単一値形式
+    {
+        std::string path = writeTmp("wave_single", R"(
+OpenRCWA 4 2
+title = single wavelength
+xmesh = -2.5e-07 10 2.5e-07
+ymesh = -2.5e-07 10 2.5e-07
+zmesh = -3e-07 10 0.0 10 7e-07
+planewave = 0 0 1
+pbc = 1 1 0
+rcwaorder = 4 0
+wavelength = 0.6
+end
+)");
+        RCWAProblem p;
+        err.clear();
+        bool ok = parseRCWAInput(path, p, err);
+        CHECK(ok, "single-value wavelength accepted");
+        if (ok) {
+            std::cout << "  single wavelength: lambdas.size()=" << p.lambdas.size() << "\n";
+            CHECK(p.lambdas.size() == 1, "exactly 1 wavelength");
+            CHECK(std::abs(p.lambdas[0] - 0.6) < 1e-12, "lambda == 0.6 um");
+        }
+    }
+    if (g_fails == prev_fails) std::cout << "PASS: " << name << "\n";
+    else                       std::cout << "FAIL: " << name << "\n";
+}
+
+// ============================================================
+// Test 21: CYL_X / CYL_Y 形状と deriveZEdges
+//   - CYL_X: containsXY は y 範囲のみで判定
+//   - CYL_Y: containsXY は x 範囲のみで判定
+//   - deriveZEdges: 範囲内の box エッジのみ追加・昇順
+// ============================================================
+static void test_cyl_xy_and_zedges()
+{
+    static const char* name = "test_cyl_xy_and_zedges";
+    int prev_fails = g_fails;
+
+    RCWABox box;
+    box.material = 2;
+    box.x0 = 0.0; box.x1 = 1.0;
+    box.y0 = 0.0; box.y1 = 1.0;
+    box.z0 = 0.0; box.z1 = 1.0;
+
+    // CYL_X (x 軸円柱): y のみ判定
+    box.shape = RCWA_SHAPE_CYL_X;
+    CHECK(box.containsXY(-5.0, 0.5), "CYL_X: x ignored, y inside");
+    CHECK(!box.containsXY(0.5, 1.5),  "CYL_X: y outside");
+
+    // CYL_Y (y 軸円柱): x のみ判定
+    box.shape = RCWA_SHAPE_CYL_Y;
+    CHECK(box.containsXY(0.5, -5.0), "CYL_Y: y ignored, x inside");
+    CHECK(!box.containsXY(1.5, 0.5),  "CYL_Y: x outside");
+
+    // deriveZEdges
+    RCWAProblem prob;
+    prob.zmin = -1.0; prob.zmax = 2.0;
+    RCWABox in;   in.z0 = 0.0;  in.z1 = 1.0;   // 範囲内 → 両エッジ追加
+    RCWABox out;  out.z0 = 5.0; out.z1 = 6.0;  // 範囲外 → 追加されない
+    prob.boxes.push_back(in);
+    prob.boxes.push_back(out);
+    auto edges = deriveZEdges(prob);
+    std::cout << "  deriveZEdges: " << edges.size() << " edges\n";
+    CHECK(edges.size() == 4, "4 edges: zmin, 0, 1, zmax");
+    for (size_t i = 1; i < edges.size(); ++i)
+        CHECK(edges[i] > edges[i-1], "z edges sorted ascending");
+    if (edges.size() == 4) {
+        CHECK(edges[0] == -1.0 && edges[1] == 0.0 &&
+              edges[2] == 1.0 && edges[3] == 2.0, "edge values correct");
+    }
+    if (g_fails == prev_fails) std::cout << "PASS: " << name << "\n";
+    else                       std::cout << "FAIL: " << name << "\n";
+}
+
+// ============================================================
+// Test 22-23 用ヘルパー: 一様スタックを解いて指定成分/保存形式の
+// CSV を書き出す (runFieldCase の汎用版)。
+// ============================================================
+static void saveUniformFieldCSV(double thetaDeg, int pol,
+                                FieldComponent comp, SaveOption opt,
+                                const std::string& path)
+{
+    const double lambda = 0.6, Lx = 0.5, Ly = 0.5, slab = 0.3;
+    const int nHx = 4;
+
+    RCWASolver solver(nHx, 0);
+    solver.disablePML();
+    solver.addLayer(makeUniformLayer(1.0,  Lx, Ly));
+    solver.addLayer(makeUniformLayer(2.25, Lx, Ly));
+    solver.addLayer(makeUniformLayer(1.0,  Lx, Ly));
+
+    const double k0 = 2.0 * Pi / lambda;
+    const double theta = thetaDeg * Pi / 180.0;
+    solver.setBlochWavevector(k0 * std::sin(theta), 0.0);
+
+    std::vector<int> stack{0, 1, 2};
+    std::vector<scalar> thick{0.0, slab, 0.0};
+    solver.solve(lambda, stack, thick);
+
+    const scalar px = (pol == 2) ? 0.0 : 1.0;
+    const scalar py = (pol == 2) ? 1.0 : 0.0;
+    Eigen::VectorXcs cInc;
+    solver.generateHorizontalPlaneWave(px, py, 0, cInc);
+
+    std::vector<std::pair<int, scalex>> inputCoeffs;
+    for (int i = 0; i < cInc.size(); ++i)
+        if (std::abs(cInc(i)) > 1e-14)
+            inputCoeffs.emplace_back(i, cInc(i));
+
+    solver.saveFieldImage(path, sliceXZ, 0.0, comp, opt,
+                          inputCoeffs, stack, thick);
+}
+
+// CSV 内の全数値を行優先の一次元配列として読む。
+static std::vector<double> csvReadAll(const std::string& path)
+{
+    std::vector<double> vals;
+    std::ifstream f(path);
+    std::string line;
+    while (std::getline(f, line)) {
+        std::stringstream ss(line);
+        std::string tok;
+        while (std::getline(ss, tok, ','))
+            try { vals.push_back(std::stod(tok)); } catch (...) {}
+    }
+    return vals;
+}
+
+// ============================================================
+// Test 22: 横方向場成分の偏波選択則
+// 一様スタック法線入射では φ=0 の x 偏波は Ex/Hy のみ、
+// y 偏波は Ey/Hx のみを励起する。
+// ============================================================
+static void test_transverse_fields()
+{
+    static const char* name = "test_transverse_fields";
+    int prev_fails = g_fails;
+
+    // x 偏波 (pol=1): Ex, Hy ≠ 0; Ey, Hx ≈ 0
+    saveUniformFieldCSV(0.0, 1, Ex, modulation, "/tmp/rcwa_t22_ex.csv");
+    saveUniformFieldCSV(0.0, 1, Ey, modulation, "/tmp/rcwa_t22_ey.csv");
+    saveUniformFieldCSV(0.0, 1, Hx, modulation, "/tmp/rcwa_t22_hx.csv");
+    saveUniformFieldCSV(0.0, 1, Hy, modulation, "/tmp/rcwa_t22_hy.csv");
+    double ex = csvMaxAbs("/tmp/rcwa_t22_ex.csv");
+    double ey = csvMaxAbs("/tmp/rcwa_t22_ey.csv");
+    double hx = csvMaxAbs("/tmp/rcwa_t22_hx.csv");
+    double hy = csvMaxAbs("/tmp/rcwa_t22_hy.csv");
+    std::cout << "  x-pol: Ex=" << ex << " Ey=" << ey
+              << " Hx=" << hx << " Hy=" << hy << "\n";
+    CHECK(ex > 0.5,  "x-pol: Ex excited");
+    CHECK(hy > 1e-3, "x-pol: Hy excited");
+    CHECK(ey >= 0.0 && ey < 1e-6, "x-pol: Ey≈0");
+    CHECK(hx >= 0.0 && hx < 1e-6, "x-pol: Hx≈0");
+
+    // y 偏波 (pol=2): Ey, Hx ≠ 0; Ex, Hy ≈ 0
+    saveUniformFieldCSV(0.0, 2, Ex, modulation, "/tmp/rcwa_t22_ex2.csv");
+    saveUniformFieldCSV(0.0, 2, Ey, modulation, "/tmp/rcwa_t22_ey2.csv");
+    saveUniformFieldCSV(0.0, 2, Hx, modulation, "/tmp/rcwa_t22_hx2.csv");
+    saveUniformFieldCSV(0.0, 2, Hy, modulation, "/tmp/rcwa_t22_hy2.csv");
+    ex = csvMaxAbs("/tmp/rcwa_t22_ex2.csv");
+    ey = csvMaxAbs("/tmp/rcwa_t22_ey2.csv");
+    hx = csvMaxAbs("/tmp/rcwa_t22_hx2.csv");
+    hy = csvMaxAbs("/tmp/rcwa_t22_hy2.csv");
+    std::cout << "  y-pol: Ex=" << ex << " Ey=" << ey
+              << " Hx=" << hx << " Hy=" << hy << "\n";
+    CHECK(ey > 0.5,  "y-pol: Ey excited");
+    CHECK(hx > 1e-3, "y-pol: Hx excited");
+    CHECK(ex >= 0.0 && ex < 1e-6, "y-pol: Ex≈0");
+    CHECK(hy >= 0.0 && hy < 1e-6, "y-pol: Hy≈0");
+
+    if (g_fails == prev_fails) std::cout << "PASS: " << name << "\n";
+    else                       std::cout << "FAIL: " << name << "\n";
+}
+
+// ============================================================
+// Test 23: SaveOption の整合性
+// 同一ケースの modulation / realpart / imagpart CSV について
+// 各セルで |f|² == Re² + Im² が成り立つことを確認する。
+// ============================================================
+static void test_save_option_consistency()
+{
+    static const char* name = "test_save_option_consistency";
+    int prev_fails = g_fails;
+
+    saveUniformFieldCSV(30.0, 1, Ex, modulation, "/tmp/rcwa_t23_mod.csv");
+    saveUniformFieldCSV(30.0, 1, Ex, realpart,   "/tmp/rcwa_t23_re.csv");
+    saveUniformFieldCSV(30.0, 1, Ex, imagpart,   "/tmp/rcwa_t23_im.csv");
+
+    auto mod = csvReadAll("/tmp/rcwa_t23_mod.csv");
+    auto re  = csvReadAll("/tmp/rcwa_t23_re.csv");
+    auto im  = csvReadAll("/tmp/rcwa_t23_im.csv");
+
+    std::cout << "  cells: mod=" << mod.size()
+              << " re=" << re.size() << " im=" << im.size() << "\n";
+    CHECK(!mod.empty(), "modulation CSV non-empty");
+    CHECK(mod.size() == re.size() && mod.size() == im.size(),
+          "all three CSVs have identical cell count");
+
+    if (mod.size() == re.size() && mod.size() == im.size()) {
+        double worst = 0.0;
+        for (size_t i = 0; i < mod.size(); ++i) {
+            double lhs = mod[i] * mod[i];
+            double rhs = re[i] * re[i] + im[i] * im[i];
+            worst = std::max(worst, std::abs(lhs - rhs));
+        }
+        std::cout << "  max ||f|^2 - (Re^2+Im^2)| = " << worst << "\n";
+        // CSV は 8 桁精度で出力されるため丸め誤差 ~1e-8 を許容する
+        CHECK(worst < 1e-6, "|f|^2 == Re^2 + Im^2 pointwise");
+    }
+    if (g_fails == prev_fails) std::cout << "PASS: " << name << "\n";
+    else                       std::cout << "FAIL: " << name << "\n";
+}
+
+// ============================================================
 // main
 // ============================================================
 int main()
@@ -838,6 +1172,12 @@ int main()
     test_phi_rotation_invariance();
     test_normal_incidence_pol_degeneracy();
     test_conical_grating();
+    test_absorption_lossy();
+    test_drude_metal_reflectance();
+    test_parse_errors();
+    test_cyl_xy_and_zedges();
+    test_transverse_fields();
+    test_save_option_consistency();
 
     std::cout << "======================================\n";
     if (g_fails == 0)

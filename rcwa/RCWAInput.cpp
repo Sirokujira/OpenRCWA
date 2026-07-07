@@ -69,7 +69,7 @@ bool parseRCWAInput(const std::string& path, RCWAProblem& prob, std::string& err
     // 材料インデックス 0 = 空気, 1 = PEC (プレースホルダ)
     prob.materialEps.clear();
     prob.materialEps.push_back(scalex(1.0, 0.0));      // 0: 空気
-    prob.materialEps.push_back(scalex(1.0, -1.0e8));   // 1: PEC (近似)
+    prob.materialEps.push_back(scalex(1.0, 1.0e8));    // 1: PEC (近似; exp(-iωt) 規約で損失は正虚部)
     prob.materialSigma.clear();
     prob.materialSigma.push_back(0.0);  // 0: 空気
     prob.materialSigma.push_back(0.0);  // 1: PEC

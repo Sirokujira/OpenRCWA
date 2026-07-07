@@ -70,12 +70,14 @@ scalex epsAt(const RCWAProblem& prob,
                 return e;  // dispersion overrides static eps; skip conductivity term
             }
         }
-        // 導電率による損失項: Δε_im = -σ/(ω·ε₀)
+        // 導電率による損失項: Δε_im = +σ/(ω·ε₀)
+        // 本ソルバの時間規約 exp(-iωt) では損失媒質は正の虚部を持つ
+        // (Lorentz 分散式 ce²-ω²-i·be·ω が正虚部を返すのと同一規約)。
         if (!prob.materialSigma.empty() && m < static_cast<int>(prob.materialSigma.size())) {
             scalar sigma = prob.materialSigma[m];
             if (sigma != 0.0) {
                 scalar omega = 2.0 * Pi * C0_UM / lambda; // [rad/s]
-                e += scalex(0.0, -sigma / (omega * EPS0));
+                e += scalex(0.0, sigma / (omega * EPS0));
             }
         }
     }
