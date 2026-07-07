@@ -1,0 +1,19 @@
+OpenRCWA 4 2
+title = 1D dielectric grating (visible light, RCWA)
+xmesh = -2.5e-07 20 2.5e-07
+ymesh = -2.5e-07 20 2.5e-07
+zmesh = -3e-07 15 0.0 10 2e-07 15 7e-07
+material = 1 2.25 0 1 0
+geometry = 2 1 -2.5e-07 2.5e-07 -2.5e-07 2.5e-07 -3e-07 0
+geometry = 2 1 -1.25e-07 1.25e-07 -2.5e-07 2.5e-07 0 2e-07
+planewave = 0 0 1
+point = Z 0 0 4.5e-07 -Z
+point = Z 0 0 -1.5e-07 +Z
+pbc = 1 1 0
+frequency1 = 4.28275e+14 7.49481e+14 30
+frequency2 = 4.28275e+14 7.49481e+14 30
+solver = 3000 50 0.001
+plotiter = 1
+plotref = 1
+plotspara = 1
+end

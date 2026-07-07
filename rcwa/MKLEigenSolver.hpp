@@ -1,6 +1,99 @@
 #pragma once
 #include "defns.h"
 #include <Eigen/Core>
+
+#if !defined(USE_MKL) && !defined(USE_LAPACKE)
+// MKL/LAPACKE のいずれも利用できない環境では Eigen の固有値ソルバにフォールバックする
+#include <Eigen/Eigenvalues>
+
+template <class MatrixType>
+class MKLEigenSolver
+{
+private:
+    typedef typename MatrixType::Scalar ScalarType;
+    typedef Eigen::Matrix<ScalarType, Eigen::Dynamic, 1> VectorType;
+
+    Eigen::ComplexEigenSolver<MatrixType> es_;
+
+public:
+    MKLEigenSolver() {}
+    void compute(const MatrixType& A) { es_.compute(A, true); }
+    const MatrixType& eigenvectors() const { return es_.eigenvectors(); }
+    const VectorType& eigenvalues() const { return es_.eigenvalues(); }
+};
+
+#elif defined(USE_LAPACKE)
+// MKL が無いがシステムの LAPACKE (zgeev/cgeev) が利用できる環境向けの実装。
+// std::complex<double>/<float> を lapack_complex_double/float としてそのまま
+// LAPACKE に渡せるようにし、Eigen::ComplexEigenSolver より高速な経路を使う。
+#include <complex>
+#define lapack_complex_float std::complex<float>
+#define lapack_complex_double std::complex<double>
+extern "C" {
+#include <lapacke.h>
+}
+
+template <class MatrixType>
+class MKLEigenSolver
+{
+private:
+    typedef typename MatrixType::Scalar ScalarType;
+    typedef Eigen::Matrix<ScalarType, Eigen::Dynamic, 1> VectorType;
+
+    MatrixType V_;
+    VectorType d_;
+
+public:
+    MKLEigenSolver() {}
+    void compute(const MatrixType& A);
+    const MatrixType& eigenvectors() const { return V_; }
+    const VectorType& eigenvalues() const { return d_; }
+};
+
+template <class MatrixType>
+void MKLEigenSolver<MatrixType>::compute(const MatrixType& A)
+{
+    int n = A.rows();
+    if constexpr (std::is_same_v<ScalarType, std::complex<double>>) {
+        std::vector<std::complex<double>> a(n * n), w(n), vr(n * n);
+        for (int i = 0; i < n; ++i)
+            for (int j = 0; j < n; ++j)
+                a[i * n + j] = A(i, j);
+
+        LAPACKE_zgeev(LAPACK_ROW_MAJOR, 'N', 'V', n,
+            a.data(), n, w.data(), nullptr, n, vr.data(), n);
+
+        V_.resize(n, n);
+        for (int i = 0; i < n; ++i)
+            for (int j = 0; j < n; ++j)
+                V_(i, j) = vr[i * n + j];
+
+        d_.resize(n);
+        for (int i = 0; i < n; ++i)
+            d_(i) = w[i];
+    } else if constexpr (std::is_same_v<ScalarType, std::complex<float>>) {
+        std::vector<std::complex<float>> a(n * n), w(n), vr(n * n);
+        for (int i = 0; i < n; ++i)
+            for (int j = 0; j < n; ++j)
+                a[i * n + j] = A(i, j);
+
+        LAPACKE_cgeev(LAPACK_ROW_MAJOR, 'N', 'V', n,
+            a.data(), n, w.data(), nullptr, n, vr.data(), n);
+
+        V_.resize(n, n);
+        for (int i = 0; i < n; ++i)
+            for (int j = 0; j < n; ++j)
+                V_(i, j) = vr[i * n + j];
+
+        d_.resize(n);
+        for (int i = 0; i < n; ++i)
+            d_(i) = w[i];
+    } else {
+        ScalarType::unimplemented;
+    }
+}
+
+#else // USE_MKL
 #include <mkl.h>
 
 template <class MatrixType>
@@ -124,3 +217,4 @@ void MKLEigenSolver<MatrixType>::compute(const MatrixType& A)
         ScalarType::unimplemented;
     }
 }
+#endif // USE_MKL
