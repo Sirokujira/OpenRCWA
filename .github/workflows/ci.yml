@@ -1,0 +1,49 @@
+# OpenRCWA (処理ロジック) CI — CPU 版ソルバーのビルド + サンプルのスモーク実行。
+# CUDA/MPI/MKL/TBB はランナーに無くてもビルド可能 (optional 化済み)。
+# RCWA コア (rcwa/*.cpp, MKL 必須) のビルド検証は MKL 導入後に拡張する。
+name: CI
+
+on:
+  push:
+    branches: [ main, "claude/**" ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-cpu:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake gcc g++ libhdf5-dev
+
+      - name: Configure (CPU only)
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DWITH_CUDA=OFF -DWITH_MPI=OFF
+
+      - name: Build orcwa / orcwa_post
+        run: cmake --build build -j"$(nproc)"
+
+      - name: Smoke test — solver (dipole sample)
+        run: |
+          mkdir -p /tmp/smoke && cp data/sample/dipole.ofd /tmp/smoke/
+          cd /tmp/smoke
+          "$GITHUB_WORKSPACE/bin/orcwa" -n 2 dipole.ofd
+          grep -q "normal end" orcwa.log
+          test -s orcwa.out
+
+      - name: Smoke test — post processor
+        run: |
+          cd /tmp/smoke
+          "$GITHUB_WORKSPACE/bin/orcwa_post" -n 2 dipole.ofd
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-logs
+          path: /tmp/smoke/*.log
+          if-no-files-found: ignore

@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.18.3)
 
 project(openRCWA
   DESCRIPTION "A free and open source RCWA solver"
-  LANGUAGES C CXX CUDA)
+  LANGUAGES C CXX)
 
 # cmake/Modules ディレクトリをモジュールの検索パスに追加
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/Modules/")
@@ -17,6 +17,9 @@ find_package(Threads REQUIRED)
 # CUDA を使用するかどうかを設定するオプションを追加
 option(WITH_CUDA "Enable CUDA support" OFF)
 if(WITH_CUDA)
+    # CUDA は WITH_CUDA=ON のときだけ有効化する (nvcc の無い環境・CI でも
+    # CPU 版をビルドできるようにする)
+    enable_language(CUDA)
     #set(CMAKE_CUDA_HOST_COMPILER /usr/bin/g++)
     message(STATUS ${CMAKE_CUDA_COMPILER})
     message(STATUS ${CMAKE_CUDA_HOST_COMPILER})
@@ -49,7 +52,9 @@ else()
     message(STATUS "_MPI マクロは定義されていません")
 endif()
 
-find_package(MKL REQUIRED)
+# MKL/TBB/Eigen は RCWA コア (rcwa/*.cpp) 用。CPU 版 orcwa/orcwa_post
+# (sol/*.c) には不要なので optional にし、無い環境でもビルド可能にする。
+find_package(MKL)
 if(MKL_FOUND)
     message(STATUS "MKL libraries: ${MKL_LIBRARIES}")
     message(STATUS "MKL include directory: ${MKL_INCLUDE_DIR}")
@@ -58,29 +63,28 @@ if(MKL_FOUND)
     add_definitions(-DEIGEN_WITH_MKL_ALL)
 endif()
 
-find_package(Eigen3 3.3 CONFIG REQUIRED)
+find_package(Eigen3 3.3 CONFIG)
 if (EIGEN3_FOUND)
    message(STATUS "Found Eigen version ${EIGEN3_VERSION_STRING}: ${EIGEN3_INCLUDE_DIRS}")
 endif ()
 
-find_package(TBB 2021.5 REQUIRED)
+find_package(TBB 2021.5 QUIET)
 if (TBB_FOUND)
     message(STATUS "Found Intel TBB version ${TBB_VERSION}: ${TBB_INCLUDE_DIRS} ${TBB_LIBRARIES}")
 endif ()
 
-if (WITH_CUDA)
-  include_directories(
-    ${MKL_INCLUDE_DIR}
-    ${EIGEN3_INCLUDE_DIRS}
-    ${TBB_INCLUDE_DIRS}
-    ${CUDAToolkit_INCLUDE_DIRS}
-  )
-else()
-  include_directories(
-    ${MKL_INCLUDE_DIR}
-    ${EIGEN3_INCLUDE_DIRS}
-    ${TBB_INCLUDE_DIRS}
-  )
+# 見つかった依存のみ include する (optional 化に伴い NOTFOUND を渡さない)
+if(MKL_FOUND)
+  include_directories(${MKL_INCLUDE_DIR})
+endif()
+if(EIGEN3_FOUND)
+  include_directories(${EIGEN3_INCLUDE_DIRS})
+endif()
+if(TBB_FOUND)
+  include_directories(${TBB_INCLUDE_DIRS})
+endif()
+if(WITH_CUDA)
+  include_directories(${CUDAToolkit_INCLUDE_DIRS})
 endif()
 
 #対応 geometry数
@@ -107,6 +111,9 @@ if(WITH_MPI)
     file(GLOB MPI_SOURCES "mpi/*.c")
 else()
     file(GLOB SOURCES "sol/*.c")
+    # setupNear.c は呼び出し元がなく、削除済みグローバル Fnorm を参照する
+    # 死にコードのため CPU ビルドから除外する (OpenFDTD と同様)
+    list(REMOVE_ITEM SOURCES "${CMAKE_SOURCE_DIR}/sol/setupNear.c")
 endif()
 
 # HDF5パッケージの検索
@@ -532,7 +539,14 @@ else()
         # ターゲットのオブジェクトディレクトリを設定
         set_target_properties(orcwa PROPERTIES
             OBJECT_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/obj"
+        )
 
+        # RCWA コアのテストターゲット群。add_exe マクロが未定義のため
+        # 現状はビルド不能 — 修正されるまで WITH_RCWA_TESTS=ON でのみ有効。
+        # (従来はこのブロック全体が閉じ忘れの set_target_properties の引数に
+        #  取り込まれておりターゲット生成されていなかった)
+        option(WITH_RCWA_TESTS "Build RCWA core test targets" OFF)
+        if(WITH_RCWA_TESTS)
         add_exe(test_gds_cpu
             tests/test_gds_cpu.cpp
             ${RCWA_SRC_FILES}
@@ -603,7 +617,7 @@ else()
           OUT_DIR
             ${ROOT_TESTS_DIR})
         set_property(TARGET test_cpu_diff PROPERTY CXX_STANDARD 17)
-        )
+        endif()
     endif()
 endif()
 

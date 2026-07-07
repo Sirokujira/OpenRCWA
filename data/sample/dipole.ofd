@@ -1,0 +1,31 @@
+OpenRCWA 4 2
+title = dipole antenna
+xmesh = -0.075 30 0.075
+ymesh = -0.075 30 0.075
+zmesh = -0.075 10 -0.025 11 0.025 10 0.075
+geometry = 1 1 0 0 0 0 -0.025 0.025
+feed = Z 0 0 0 1 0 50
+frequency1 = 2e9 3e9 20
+frequency2 = 3e9 3e9 0
+solver = 1000 50 1e-3
+#plot3dgeom = 1
+plotiter = 1
+plotsmith = 1
+plotzin = 1
+plotyin = 1
+plotref = 1
+plotfar1d = X 72
+far1dstyle = 0
+far1dcomponent = 1 0 0
+far1ddb = 1
+plotfar2d = 18 36
+far2dcomponent = 1 0 0 0 0 0 0
+far2ddb = 1
+far2dobj = 0.5
+plotnear2d = E X 0.03
+near2ddim = 1 1
+near2ddb = 0
+near2dcontour = 0
+near2dobj = 1
+near2dnoinc = 0
+end
