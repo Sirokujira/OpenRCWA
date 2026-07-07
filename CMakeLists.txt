@@ -83,7 +83,7 @@ else()
     endif()
 endif()
 
-find_package(Eigen3 3.3 CONFIG REQUIRED)
+find_package(Eigen3 CONFIG REQUIRED)  # バージョン指定なし: Homebrew の Eigen 5.x も受理する
 if (EIGEN3_FOUND)
    message(STATUS "Found Eigen version ${EIGEN3_VERSION_STRING}: ${EIGEN3_INCLUDE_DIRS}")
 endif ()

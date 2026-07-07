@@ -17,6 +17,8 @@ typedef struct {
     double phase_deg;
 } spara_data_t;
 
+void outputTouchstone(FILE *fp, int num_ports);
+
 void calcSpara(void)
 {
 	if ((NPoint <= 0) || (NFreq1 <= 0)) return;
