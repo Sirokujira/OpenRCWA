@@ -146,7 +146,7 @@ void readhdf5() {
     SurfaceHz = (d_complex_t **)malloc(size);
 
 	//plot2d?
-    size = NN * NFreq2 * sizeof(float *);
+    size = NN * NFreq2 * sizeof(float);
     cEx_r = (float *)malloc(size);
     cEx_i = (float *)malloc(size);
     cEy_r = (float *)malloc(size);
@@ -177,10 +177,13 @@ void readhdf5() {
 
 	//surface_t
     //Surface = (double *)malloc(sizeof(double) * NSurface);
+    if (Surface == NULL) {
+        Surface = (surface_t *)malloc(NSurface * sizeof(surface_t));
+    }
     dataset_id = H5Dopen(metadata_group_id, "Surface", H5P_DEFAULT);
     status = H5Dread(dataset_id, memtype, H5S_ALL, H5S_ALL, H5P_DEFAULT, Surface);
     if (status < 0) {
-        fprintf(stderr, "Error reading dataset: %s\n", Surface);
+        fprintf(stderr, "Error reading dataset: Surface\n");
     }
     H5Dclose(dataset_id);
     H5Tclose(memtype);
@@ -221,13 +224,16 @@ void readhdf5() {
         fprintf(stderr, "Error reading dataset: %s\n", SPARA_DATASET_NAME);
     }
     // spara_data から Spara への加工]
-    //Spara  =    (d_complex_t *)malloc(sizeof(d_complex_t) * NPoint * NFreq1);
+    if (Spara == NULL) {
+        Spara = (d_complex_t *)malloc(sizeof(d_complex_t) * NPoint * NFreq1);
+    }
     for (int ifreq = 0; ifreq < NFreq1; ifreq++) {
         for (int ipoint = 0; ipoint < NPoint; ipoint++) {
             const int id = (ipoint * NFreq1) + ifreq;
             //Spara[id] = d_polar(pow(10, spara_data[ifreq][ipoint].magnitude_dB / 20), spara_data[ifreq][ipoint].phase_deg * (M_PI / 180.0));
-            Spara[id].r = spara_data[ifreq][ipoint].magnitude_dB;
-            Spara[id].i = spara_data[ifreq][ipoint].phase_deg;
+            const double mag = pow(10, spara_data[ifreq][ipoint].magnitude_dB / 20);
+            const double ph  = spara_data[ifreq][ipoint].phase_deg * (M_PI / 180.0);
+            Spara[id] = d_complex(mag * cos(ph), mag * sin(ph));
         }
     }
     H5Dclose(dataset_id);
