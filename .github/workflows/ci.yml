@@ -72,3 +72,70 @@ jobs:
           name: smoke-logs
           path: /tmp/smoke/*.log
           if-no-files-found: ignore
+
+  # macOS (Apple Silicon)。AppleClang は OpenMP を同梱しないため、
+  # Homebrew の libomp を明示指定して find_package(OpenMP) を通す。
+  # LAPACK は macOS 標準の Accelerate framework で満たされ、
+  # LAPACKE は無いので RCWA コアは Eigen ソルバへフォールバックする。
+  build-macos:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write   # タグ push 時の Release 添付に使用
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: brew install libomp hdf5 eigen
+
+      - name: Configure (CPU only)
+        run: |
+          OMP="$(brew --prefix libomp)"
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DWITH_CUDA=OFF -DWITH_MPI=OFF \
+            -DOpenMP_C_FLAGS="-Xclang -fopenmp -I${OMP}/include" \
+            -DOpenMP_C_LIB_NAMES=omp \
+            -DOpenMP_CXX_FLAGS="-Xclang -fopenmp -I${OMP}/include" \
+            -DOpenMP_CXX_LIB_NAMES=omp \
+            -DOpenMP_omp_LIBRARY="${OMP}/lib/libomp.dylib"
+
+      - name: Build orcwa / orcwa_post
+        run: cmake --build build -j"$(sysctl -n hw.ncpu)"
+
+      - name: Smoke test — solver (dipole sample)
+        run: |
+          mkdir -p /tmp/smoke && cp data/sample/dipole.ofd /tmp/smoke/
+          cd /tmp/smoke
+          "$GITHUB_WORKSPACE/bin/orcwa" -n 2 dipole.ofd
+          grep -q "normal end" orcwa.log
+          test -s orcwa.out
+
+      - name: Smoke test — post processor
+        run: |
+          cd /tmp/smoke
+          "$GITHUB_WORKSPACE/bin/orcwa_post" -n 2 dipole.ofd
+
+      - name: Upload binaries (artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: orcwa-macos-arm64
+          path: |
+            bin/orcwa
+            bin/orcwa_post
+
+      - name: Package for release
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: tar czf orcwa-macos-arm64.tar.gz -C bin orcwa orcwa_post
+
+      - name: Attach binaries to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: orcwa-macos-arm64.tar.gz
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-logs-macos
+          path: /tmp/smoke/*.log
+          if-no-files-found: ignore
