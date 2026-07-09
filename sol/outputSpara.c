@@ -17,6 +17,8 @@ typedef struct {
     double phase_deg;
 } spara_data_t;
 
+void outputTouchstone(FILE *fp, int num_ports);
+
 void calcSpara(void)
 {
 	if ((NPoint <= 0) || (NFreq1 <= 0)) return;
@@ -136,7 +138,8 @@ static void write_spara_data_to_hdf5()
     }
 
     // S-parameters データを書き込み
-    status = H5Dwrite(dataset_id, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, data);
+    // メモリ側も複合型で渡す (H5T_NATIVE_DOUBLE では型不一致になる)
+    status = H5Dwrite(dataset_id, datatype_id, H5S_ALL, H5S_ALL, H5P_DEFAULT, data);
     if (status < 0) {
         fprintf(stderr, "Error writing dataset: %s\n", SPARA_DATASET_NAME);
     }
@@ -172,10 +175,7 @@ void outputSpara(FILE *fp)
 
 		fclose(fp_snp);
 	}
-	else
-	{
-		fclose(fp_snp);
-	}
+	// fopen 失敗時 (fp_snp == NULL) は何も閉じない
 }
 
 void outputTouchstone(FILE *fp, int num_ports) {

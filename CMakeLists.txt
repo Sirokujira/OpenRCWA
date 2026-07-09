@@ -83,7 +83,12 @@ else()
     endif()
 endif()
 
-find_package(Eigen3 3.3 CONFIG REQUIRED)
+find_package(Eigen3 CONFIG REQUIRED)  # バージョン指定なし: Homebrew の Eigen 5.x も受理する
+# Eigen 5.x の config は旧来の EIGEN3_INCLUDE_DIRS 変数を提供しないため、
+# include_directories() ベースの箇所 (tests/ 等) 向けにターゲットから補完する
+if(NOT EIGEN3_INCLUDE_DIRS)
+    get_target_property(EIGEN3_INCLUDE_DIRS Eigen3::Eigen INTERFACE_INCLUDE_DIRECTORIES)
+endif()
 if (EIGEN3_FOUND)
    message(STATUS "Found Eigen version ${EIGEN3_VERSION_STRING}: ${EIGEN3_INCLUDE_DIRS}")
 endif ()
