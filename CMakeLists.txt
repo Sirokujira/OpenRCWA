@@ -414,6 +414,12 @@ else()
         add_executable(orcwa ${SOURCES} src/sol_Main.c
             sol/rcwa_bridge.cpp ${RCWA_SRC_FILES})
 
+        # Eigen 内部の OpenMP 並列 GEMM を無効化する。
+        # macOS (AppleClang + -Xclang -fopenmp + libomp) では並列 GEMM が
+        # 計算結果を壊し、RCWA の回折効率が非決定的に破綻する。
+        # RCWA の行列サイズでは並列化の利得も無い。
+        target_compile_definitions(orcwa PRIVATE EIGEN_DONT_PARALLELIZE)
+
         # Include directories for header files
         target_include_directories(orcwa PUBLIC "${PROJECT_SOURCE_DIR}/include")
 
