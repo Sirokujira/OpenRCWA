@@ -1,6 +1,7 @@
 # OpenRCWA (処理ロジック) CI — CPU 版ソルバーのビルド + サンプルのスモーク実行。
 # CUDA/MPI/MKL/TBB はランナーに無くてもビルド可能 (optional 化済み)。
-# RCWA コア (rcwa/*.cpp, MKL 必須) のビルド検証は MKL 導入後に拡張する。
+# RCWA コア (rcwa/*.cpp) は orcwa に結線済み: grating サンプルで
+# 回折効率の計算とエネルギー保存 (R+T=1) を検証する。
 name: CI
 
 on:
@@ -45,6 +46,16 @@ jobs:
           cd /tmp/smoke
           "$GITHUB_WORKSPACE/bin/orcwa_post" -n 2 dipole.ofd
 
+      - name: Smoke test — RCWA (grating sample)
+        run: |
+          mkdir -p /tmp/smoke-rcwa && cp data/sample/grating.ofd /tmp/smoke-rcwa/
+          cd /tmp/smoke-rcwa
+          "$GITHUB_WORKSPACE/bin/orcwa" -n 2 grating.ofd
+          grep -q "normal end" orcwa.log
+          # 全周波数・両偏波でエネルギー保存 (R+T=1) を確認
+          awk -F, 'NR>1 { if ((($3+$4)-1)^2 > 1e-8 || (($5+$6)-1)^2 > 1e-8) \
+            { print "energy not conserved:", $0; exit 1 } }' rcwa_efficiency.csv
+
       - name: Upload binaries (artifact)
         uses: actions/upload-artifact@v4
         with:
@@ -70,7 +81,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: smoke-logs
-          path: /tmp/smoke/*.log
+          path: |
+            /tmp/smoke/*.log
+            /tmp/smoke-rcwa/*.log
           if-no-files-found: ignore
 
   # macOS (Apple Silicon)。AppleClang は OpenMP を同梱しないため、
@@ -114,6 +127,16 @@ jobs:
           cd /tmp/smoke
           "$GITHUB_WORKSPACE/bin/orcwa_post" -n 2 dipole.ofd
 
+      - name: Smoke test — RCWA (grating sample)
+        run: |
+          mkdir -p /tmp/smoke-rcwa && cp data/sample/grating.ofd /tmp/smoke-rcwa/
+          cd /tmp/smoke-rcwa
+          "$GITHUB_WORKSPACE/bin/orcwa" -n 2 grating.ofd
+          grep -q "normal end" orcwa.log
+          # 全周波数・両偏波でエネルギー保存 (R+T=1) を確認
+          awk -F, 'NR>1 { if ((($3+$4)-1)^2 > 1e-8 || (($5+$6)-1)^2 > 1e-8) \
+            { print "energy not conserved:", $0; exit 1 } }' rcwa_efficiency.csv
+
       - name: Upload binaries (artifact)
         uses: actions/upload-artifact@v4
         with:
@@ -137,5 +160,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: smoke-logs-macos
-          path: /tmp/smoke/*.log
+          path: |
+            /tmp/smoke/*.log
+            /tmp/smoke-rcwa/*.log
           if-no-files-found: ignore

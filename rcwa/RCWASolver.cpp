@@ -1729,6 +1729,8 @@ void RCWASolver::scatterPlaneWave(
 
 	// we only excite and receive plane wave in dielectric material
 	// metal is not supported for excitation and receiver
+	// (both are normalized by the incident wavevector k0*sqrt(eps_ref):
+	//  power per order = Re(kz)/kz_inc * |amplitude|^2)
 	REF = 1. / (sqrt(eps_ref.real()) * k0) * Kzref_r.asDiagonal() * r;
-	TRN = 1. / (sqrt(eps_trn.real()) * k0) * Kztrn_r.asDiagonal() * t;
+	TRN = 1. / (sqrt(eps_ref.real()) * k0) * Kztrn_r.asDiagonal() * t;
 }

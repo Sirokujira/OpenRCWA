@@ -1,0 +1,12 @@
+OpenRCWA 4 2
+title = RCWA sample: subwavelength grating on glass substrate
+# rcwa = <harmonics N> <period[m]>
+rcwa = 5 3.0e-7
+# rcwalayer = <eps1> <eps2> <fill> <thickness[m]>  (入射側 → 透過側)
+# 先頭と末尾は半無限層 (thickness は無視される)
+rcwalayer = 1.0 1.0 0.5 0
+rcwalayer = 4.0 1.0 0.5 2.0e-7
+rcwalayer = 2.25 2.25 0.5 0
+# 可視域掃引: lambda = 0.4 - 0.7 um (f = c/lambda)
+frequency1 = 4.3e14 7.5e14 16
+end

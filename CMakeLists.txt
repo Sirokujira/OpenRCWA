@@ -410,16 +410,22 @@ else()
         target_link_libraries(orcwa_mpi PRIVATE OpenMP::OpenMP_C Threads::Threads m)
         target_link_libraries(orcwa_mpi PRIVATE MPI::MPI_C hdf5::hdf5)
     else ()
-        add_executable(orcwa ${SOURCES} src/sol_Main.c)
+        # RCWA コア (rcwa/*.cpp) を sol/rcwa_bridge.cpp 経由で orcwa に結線する
+        add_executable(orcwa ${SOURCES} src/sol_Main.c
+            sol/rcwa_bridge.cpp ${RCWA_SRC_FILES})
 
         # Include directories for header files
         target_include_directories(orcwa PUBLIC "${PROJECT_SOURCE_DIR}/include")
 
         # Link OpenMP libraries to the target
+        # (C++ ソースを含むためリンカは CXX、MKL_LIBRARIES は
+        #  MKL 未検出時 LAPACK/LAPACKE を指す)
         if(OpenMP_C_FOUND)
-            target_link_libraries(orcwa PRIVATE OpenMP::OpenMP_C m hdf5::hdf5)
+            target_link_libraries(orcwa PRIVATE OpenMP::OpenMP_C OpenMP::OpenMP_CXX
+                m hdf5::hdf5 ${MKL_LIBRARIES} ${TBB_LIBRARIES})
         else()
-            target_link_libraries(orcwa PRIVATE m hdf5::hdf5)
+            target_link_libraries(orcwa PRIVATE m hdf5::hdf5
+                ${MKL_LIBRARIES} ${TBB_LIBRARIES})
         endif()
     endif()
 endif()
