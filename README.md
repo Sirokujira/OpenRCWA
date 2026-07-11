@@ -40,8 +40,11 @@ subprocess として起動されます。
 
 - 必須: C99/C++17 コンパイラ、CMake 3.18+、OpenMP、libhdf5、LAPACK、Eigen3
 - オプション: MKL (あれば LAPACKE 経由の固有値ソルバ)、TBB、CUDA
-- macOS: LAPACK は Accelerate framework、OpenMP は Homebrew libomp
-  (LAPACKE が無いため Eigen ソルバへ自動フォールバック)
+- macOS: LAPACK は Accelerate framework、OpenMP は Homebrew libomp。
+  **RCWA モードでは Homebrew `lapack` (LAPACKE) の導入を推奨** —
+  Eigen の固有値ソルバへのフォールバックは ±m 次数の縮退固有値で
+  基底が不良条件になることがあり、回折効率が不安定になる
+  (CI の Configure ステップの `-DLAPACKE_*` 指定を参照)
 
 ## ビルド
 
