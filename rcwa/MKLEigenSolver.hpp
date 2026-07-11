@@ -26,7 +26,11 @@ public:
 // MKL が無いがシステムの LAPACKE (zgeev/cgeev) が利用できる環境向けの実装。
 // std::complex<double>/<float> を lapack_complex_double/float としてそのまま
 // LAPACKE に渡せるようにし、Eigen::ComplexEigenSolver より高速な経路を使う。
+// zgeev の失敗 (info != 0) や残差の大きい結果は Eigen ソルバで解き直す。
 #include <complex>
+#include <iostream>
+#include <vector>
+#include <Eigen/Eigenvalues>
 #define lapack_complex_float std::complex<float>
 #define lapack_complex_double std::complex<double>
 extern "C" {
@@ -43,6 +47,23 @@ private:
     MatrixType V_;
     VectorType d_;
 
+    // ‖A・V − V・diag(d)‖∞ / ‖A‖∞ による検算
+    bool verified(const MatrixType& A) const
+    {
+        const auto normA = A.cwiseAbs().maxCoeff();
+        if (!(normA > 0)) return true;
+        const auto res =
+            (A * V_ - V_ * d_.asDiagonal()).cwiseAbs().maxCoeff();
+        return res <= 1e-8 * normA;
+    }
+
+    void computeEigenFallback(const MatrixType& A)
+    {
+        Eigen::ComplexEigenSolver<MatrixType> es(A, true);
+        V_ = es.eigenvectors();
+        d_ = es.eigenvalues();
+    }
+
 public:
     MKLEigenSolver() {}
     void compute(const MatrixType& A);
@@ -54,13 +75,14 @@ template <class MatrixType>
 void MKLEigenSolver<MatrixType>::compute(const MatrixType& A)
 {
     int n = A.rows();
+    lapack_int info = 0;
     if constexpr (std::is_same_v<ScalarType, std::complex<double>>) {
         std::vector<std::complex<double>> a(n * n), w(n), vr(n * n);
         for (int i = 0; i < n; ++i)
             for (int j = 0; j < n; ++j)
                 a[i * n + j] = A(i, j);
 
-        LAPACKE_zgeev(LAPACK_ROW_MAJOR, 'N', 'V', n,
+        info = LAPACKE_zgeev(LAPACK_ROW_MAJOR, 'N', 'V', n,
             a.data(), n, w.data(), nullptr, n, vr.data(), n);
 
         V_.resize(n, n);
@@ -77,7 +99,7 @@ void MKLEigenSolver<MatrixType>::compute(const MatrixType& A)
             for (int j = 0; j < n; ++j)
                 a[i * n + j] = A(i, j);
 
-        LAPACKE_cgeev(LAPACK_ROW_MAJOR, 'N', 'V', n,
+        info = LAPACKE_cgeev(LAPACK_ROW_MAJOR, 'N', 'V', n,
             a.data(), n, w.data(), nullptr, n, vr.data(), n);
 
         V_.resize(n, n);
@@ -90,6 +112,16 @@ void MKLEigenSolver<MatrixType>::compute(const MatrixType& A)
             d_(i) = w[i];
     } else {
         ScalarType::unimplemented;
+    }
+
+    if (info != 0 || !verified(A)) {
+        std::clog << "[MKLEigenSolver] LAPACKE geev unreliable (info="
+                  << info << "), falling back to Eigen solver\n";
+        computeEigenFallback(A);
+        if (!verified(A)) {
+            std::clog << "[MKLEigenSolver] warning: Eigen solver residual"
+                         " also exceeds tolerance\n";
+        }
     }
 }
 

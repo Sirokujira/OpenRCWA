@@ -1,6 +1,7 @@
 # OpenRCWA (処理ロジック) CI — CPU 版ソルバーのビルド + サンプルのスモーク実行。
 # CUDA/MPI/MKL/TBB はランナーに無くてもビルド可能 (optional 化済み)。
-# RCWA コア (rcwa/*.cpp, MKL 必須) のビルド検証は MKL 導入後に拡張する。
+# RCWA コア (rcwa/*.cpp) は orcwa に結線済み: grating サンプルで
+# 回折効率の計算とエネルギー保存 (R+T=1) を検証する。
 name: CI
 
 on:
@@ -45,6 +46,18 @@ jobs:
           cd /tmp/smoke
           "$GITHUB_WORKSPACE/bin/orcwa_post" -n 2 dipole.ofd
 
+      - name: Smoke test — RCWA (grating sample)
+        run: |
+          mkdir -p /tmp/smoke-rcwa && cp data/sample/grating.ofd /tmp/smoke-rcwa/
+          cd /tmp/smoke-rcwa
+          "$GITHUB_WORKSPACE/bin/orcwa" -n 2 grating.ofd
+          grep -q "normal end" orcwa.log
+          # 全周波数・両偏波でエネルギー保存 (R+T=1) を確認。
+          # LAPACKE 経路の数値誤差は ~1e-7 だが、BLAS/アーキテクチャ差の
+          # 安全余裕をみて許容 |R+T-1| <= 3e-3
+          awk -F, 'NR>1 { if ((($3+$4)-1)^2 > 9e-6 || (($5+$6)-1)^2 > 9e-6) \
+            { print "energy not conserved:", $0; exit 1 } }' rcwa_efficiency.csv
+
       - name: Upload binaries (artifact)
         uses: actions/upload-artifact@v4
         with:
@@ -70,13 +83,16 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: smoke-logs
-          path: /tmp/smoke/*.log
+          path: |
+            /tmp/smoke/*.log
+            /tmp/smoke-rcwa/*.log
           if-no-files-found: ignore
 
   # macOS (Apple Silicon)。AppleClang は OpenMP を同梱しないため、
   # Homebrew の libomp を明示指定して find_package(OpenMP) を通す。
-  # LAPACK は macOS 標準の Accelerate framework で満たされ、
-  # LAPACKE は無いので RCWA コアは Eigen ソルバへフォールバックする。
+  # RCWA コアの固有値計算は Homebrew の lapack (keg-only) の LAPACKE を使う:
+  # Eigen の ComplexEigenSolver フォールバックは ±m 次数の縮退固有値で
+  # 固有ベクトル基底が不良条件になることがあり、回折効率が不安定になるため。
   build-macos:
     runs-on: macos-latest
     timeout-minutes: 30
@@ -86,12 +102,15 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install dependencies
-        run: brew install libomp hdf5 eigen
+        run: brew install libomp hdf5 eigen lapack
 
       - name: Configure (CPU only)
         run: |
           OMP="$(brew --prefix libomp)"
+          LAP="$(brew --prefix lapack)"
           cmake -B build -DCMAKE_BUILD_TYPE=Release -DWITH_CUDA=OFF -DWITH_MPI=OFF \
+            -DLAPACKE_INCLUDE_DIR="${LAP}/include" \
+            -DLAPACKE_LIBRARY="${LAP}/lib/liblapacke.dylib" \
             -DOpenMP_C_FLAGS="-Xclang -fopenmp -I${OMP}/include" \
             -DOpenMP_C_LIB_NAMES=omp \
             -DOpenMP_CXX_FLAGS="-Xclang -fopenmp -I${OMP}/include" \
@@ -113,6 +132,18 @@ jobs:
         run: |
           cd /tmp/smoke
           "$GITHUB_WORKSPACE/bin/orcwa_post" -n 2 dipole.ofd
+
+      - name: Smoke test — RCWA (grating sample)
+        run: |
+          mkdir -p /tmp/smoke-rcwa && cp data/sample/grating.ofd /tmp/smoke-rcwa/
+          cd /tmp/smoke-rcwa
+          "$GITHUB_WORKSPACE/bin/orcwa" -n 2 grating.ofd
+          grep -q "normal end" orcwa.log
+          # 全周波数・両偏波でエネルギー保存 (R+T=1) を確認。
+          # LAPACKE 経路の数値誤差は ~1e-7 だが、BLAS/アーキテクチャ差の
+          # 安全余裕をみて許容 |R+T-1| <= 3e-3
+          awk -F, 'NR>1 { if ((($3+$4)-1)^2 > 9e-6 || (($5+$6)-1)^2 > 9e-6) \
+            { print "energy not conserved:", $0; exit 1 } }' rcwa_efficiency.csv
 
       - name: Upload binaries (artifact)
         uses: actions/upload-artifact@v4
@@ -137,5 +168,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: smoke-logs-macos
-          path: /tmp/smoke/*.log
+          path: |
+            /tmp/smoke/*.log
+            /tmp/smoke-rcwa/*.log
           if-no-files-found: ignore
