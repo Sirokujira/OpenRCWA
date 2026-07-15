@@ -183,8 +183,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # hdf5 の既定機能 szip は libaec を gitlab.dkrz.de から取得するが
+      # 429 で落ちることがあるため、必要な core+zlib のみに絞る
       - name: Install dependencies (vcpkg)
-        run: vcpkg install hdf5:x64-windows-static-md eigen3:x64-windows-static-md
+        run: vcpkg install "hdf5[core,zlib]:x64-windows-static-md" eigen3:x64-windows-static-md --recurse
 
       - name: Set up MSVC environment
         uses: ilammy/msvc-dev-cmd@v1
