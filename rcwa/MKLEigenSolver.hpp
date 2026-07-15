@@ -17,7 +17,21 @@ private:
 
 public:
     MKLEigenSolver() {}
-    void compute(const MatrixType& A) { es_.compute(A, true); }
+    void compute(const MatrixType& A)
+    {
+        // RCWA の波動方程式行列は ±m 次数の構造縮退を持ち、縮退固有値の
+        // 固有ベクトル基底が処理系依存でほぼ線形従属になることがある
+        // (MSVC ビルドで回折効率が発散する事象を確認)。対角に微小な
+        // 非一様摂動を加えて縮退を決定的に分離し、良条件の基底を得る。
+        // 固有値の変化は ~1e-11・‖A‖ で回折効率への影響は無視できる。
+        MatrixType Ap = A;
+        const double scale = (double)A.cwiseAbs().maxCoeff();
+        if (scale > 0) {
+            for (Eigen::Index i = 0; i < Ap.rows(); ++i)
+                Ap(i, i) += ScalarType(scale * 1e-11 * (double)(i + 1));
+        }
+        es_.compute(Ap, true);
+    }
     const MatrixType& eigenvectors() const { return es_.eigenvectors(); }
     const VectorType& eigenvalues() const { return es_.eigenvalues(); }
 };
@@ -59,7 +73,14 @@ private:
 
     void computeEigenFallback(const MatrixType& A)
     {
-        Eigen::ComplexEigenSolver<MatrixType> es(A, true);
+        // 縮退固有値の基底不良条件対策の微小対角摂動 (Eigen フォールバック側と同じ)
+        MatrixType Ap = A;
+        const double scale = (double)A.cwiseAbs().maxCoeff();
+        if (scale > 0) {
+            for (Eigen::Index i = 0; i < Ap.rows(); ++i)
+                Ap(i, i) += ScalarType(scale * 1e-11 * (double)(i + 1));
+        }
+        Eigen::ComplexEigenSolver<MatrixType> es(Ap, true);
         V_ = es.eigenvectors();
         d_ = es.eigenvalues();
     }
