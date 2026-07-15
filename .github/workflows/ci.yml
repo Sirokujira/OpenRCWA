@@ -208,6 +208,8 @@ jobs:
           Copy-Item data/sample/dipole.ofd smoke/
           Set-Location smoke
           & "$env:GITHUB_WORKSPACE\bin\orcwa.exe" -n 2 dipole.ofd
+          Write-Host ("orcwa exit code: 0x{0:X8}" -f $LASTEXITCODE)
+          if (Test-Path orcwa.log) { Get-Content orcwa.log -Tail 5 }
           if ($LASTEXITCODE -ne 0) { exit 1 }
           if (-not (Select-String -Path orcwa.log -Pattern "normal end" -Quiet)) { Write-Error "no normal end"; exit 1 }
           if ((Get-Item orcwa.out).Length -eq 0) { Write-Error "empty orcwa.out"; exit 1 }

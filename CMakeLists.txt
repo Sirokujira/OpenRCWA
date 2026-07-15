@@ -431,6 +431,10 @@ else()
         # RCWA コア (rcwa/*.cpp) を sol/rcwa_bridge.cpp 経由で orcwa に結線する
         add_executable(orcwa ${SOURCES} src/sol_Main.c
             sol/rcwa_bridge.cpp ${RCWA_SRC_FILES})
+        if(MSVC)
+            # MSVC の既定スタック 1MB では FDTD ループが不足する
+            target_link_options(orcwa PRIVATE /STACK:16777216)
+        endif()
 
         # Eigen 内部の OpenMP 並列 GEMM を無効化する。
         # macOS (AppleClang + -Xclang -fopenmp + libomp) では並列 GEMM が
@@ -446,9 +450,9 @@ else()
         #  MKL 未検出時 LAPACK/LAPACKE を指す)
         if(OpenMP_C_FOUND)
             target_link_libraries(orcwa PRIVATE OpenMP::OpenMP_C OpenMP::OpenMP_CXX
-                m hdf5::hdf5 ${MKL_LIBRARIES} ${TBB_LIBRARIES})
+                ${MATH_LIB} HDF5::HDF5 ${MKL_LIBRARIES} ${TBB_LIBRARIES})
         else()
-            target_link_libraries(orcwa PRIVATE ${MATH_LIB} hdf5::hdf5
+            target_link_libraries(orcwa PRIVATE ${MATH_LIB} HDF5::HDF5
                 ${MKL_LIBRARIES} ${TBB_LIBRARIES})
         endif()
     endif()
@@ -466,11 +470,14 @@ if (WITH_POST)
     )
 
     add_executable(orcwa_post ${POST_SOURCES} ${POST_SOL_SOURCES} src/post_Main.c)
+    if(MSVC)
+        target_link_options(orcwa_post PRIVATE /STACK:16777216)
+    endif()
 
     # Include directories for header files
     target_include_directories(orcwa_post PUBLIC "${PROJECT_SOURCE_DIR}/include")
 
-    target_link_libraries(orcwa_post PRIVATE OpenMP::OpenMP_C ${MATH_LIB} hdf5::hdf5)
+    target_link_libraries(orcwa_post PRIVATE OpenMP::OpenMP_C ${MATH_LIB} HDF5::HDF5)
 endif()
 
 option(WITH_DATALIB "Build C data-creation library and samples" ON)
