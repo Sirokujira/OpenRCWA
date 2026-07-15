@@ -10,7 +10,7 @@
 // 温度更新関数
 //void updateTemperature(double *T, int Nx, int Ny, int Nz, double alpha, double Dt, double *P_loss) {
 // 温度更新関数
-void updateTemperature(double *T, int NN, int NFreq2, double alpha, double Dt, double *P_loss, double Dx, double Dy, double Dz) {
+void updateTemperature(double *T, int64_t NN, int NFreq2, double alpha, double Dt, double *P_loss, double Dx, double Dy, double Dz) {
     for (int ifreq = 0; ifreq < NFreq2; ifreq++) {
         const int64_t base_idx = (int64_t)ifreq * NN;
         // NA マクロで 3 次元格子の隣接セルを参照する (内点のみ更新、境界は固定境界)
@@ -32,24 +32,28 @@ void updateTemperature(double *T, int NN, int NFreq2, double alpha, double Dt, d
 
 
 // 発熱量の計算
-void calculatePowerLoss(double *P_loss, int NN, int NFreq2, double sigma, double mu_double_prime,
-                        double *cEx_r, double *cEx_i, double *cEy_r, double *cEy_i, double *cEz_r, double *cEz_i,
-                        double *cHx_r, double *cHx_i, double *cHy_r, double *cHy_i, double *cHz_r, double *cHz_i,
-                        double *Freq2) {
+// 注意: DFT 配列 (cEx_r 等) は float。double* で受けると読み越しになり
+// Windows ではアクセス違反になる (glibc では偶然動作していた)
+void calculatePowerLoss(double *P_loss, int64_t NN, int NFreq2, double sigma, double mu_double_prime,
+                        const float *cEx_r, const float *cEx_i, const float *cEy_r, const float *cEy_i,
+                        const float *cEz_r, const float *cEz_i,
+                        const float *cHx_r, const float *cHx_i, const float *cHy_r, const float *cHy_i,
+                        const float *cHz_r, const float *cHz_i,
+                        const double *Freq2) {
     for (int ifreq = 0; ifreq < NFreq2; ifreq++) {
         double frequency = Freq2[ifreq];  // 各周波数を取得
         double omega = 2 * M_PI * frequency;  // 角周波数の計算
-        int base_idx = ifreq * NN;
-        for (int i = 0; i < NN; i++) {
+        int64_t base_idx = (int64_t)ifreq * NN;
+        for (int64_t i = 0; i < NN; i++) {
             // 電界の絶対値二乗
-            double E_magnitude_sq = cEx_r[base_idx + i] * cEx_r[base_idx + i] + cEx_i[base_idx + i] * cEx_i[base_idx + i] +
-                                    cEy_r[base_idx + i] * cEy_r[base_idx + i] + cEy_i[base_idx + i] * cEy_i[base_idx + i] +
-                                    cEz_r[base_idx + i] * cEz_r[base_idx + i] + cEz_i[base_idx + i] * cEz_i[base_idx + i];
+            double E_magnitude_sq = (double)cEx_r[base_idx + i] * cEx_r[base_idx + i] + (double)cEx_i[base_idx + i] * cEx_i[base_idx + i] +
+                                    (double)cEy_r[base_idx + i] * cEy_r[base_idx + i] + (double)cEy_i[base_idx + i] * cEy_i[base_idx + i] +
+                                    (double)cEz_r[base_idx + i] * cEz_r[base_idx + i] + (double)cEz_i[base_idx + i] * cEz_i[base_idx + i];
 
             // 磁界の絶対値二乗
-            double H_magnitude_sq = cHx_r[base_idx + i] * cHx_r[base_idx + i] + cHx_i[base_idx + i] * cHx_i[base_idx + i] +
-                                    cHy_r[base_idx + i] * cHy_r[base_idx + i] + cHy_i[base_idx + i] * cHy_i[base_idx + i] +
-                                    cHz_r[base_idx + i] * cHz_r[base_idx + i] + cHz_i[base_idx + i] * cHz_i[base_idx + i];
+            double H_magnitude_sq = (double)cHx_r[base_idx + i] * cHx_r[base_idx + i] + (double)cHx_i[base_idx + i] * cHx_i[base_idx + i] +
+                                    (double)cHy_r[base_idx + i] * cHy_r[base_idx + i] + (double)cHy_i[base_idx + i] * cHy_i[base_idx + i] +
+                                    (double)cHz_r[base_idx + i] * cHz_r[base_idx + i] + (double)cHz_i[base_idx + i] * cHz_i[base_idx + i];
 
             // 発熱量密度の計算
             P_loss[base_idx + i] = 0.5 * sigma * E_magnitude_sq + 0.5 * omega * mu_double_prime * H_magnitude_sq;
