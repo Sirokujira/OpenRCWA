@@ -27,8 +27,12 @@ void write_cross_section_data_to_hdf5(const double bcs[], const double fcs[])
     hid_t file_id, group_id, dataset_id, dataspace_id, datatype_id;
     herr_t status;
 
-    // cross_section_data_t 型のデータを保持する配列を作成
-    cross_section_data_t data[NFreq2];
+    // cross_section_data_t 型のデータを保持する配列を作成 (MSVC は C99 VLA 非対応のため malloc で確保)
+    cross_section_data_t *data = (cross_section_data_t *)malloc((size_t)NFreq2 * sizeof(cross_section_data_t));
+    if (data == NULL) {
+        fprintf(stderr, "Error allocating memory for cross section data\n");
+        return;
+    }
 
     // cross section データの計算
     for (int ifreq = 0; ifreq < NFreq2; ifreq++) {
@@ -41,6 +45,7 @@ void write_cross_section_data_to_hdf5(const double bcs[], const double fcs[])
     file_id = H5Fopen(FILE_NAME, H5F_ACC_RDWR, H5P_DEFAULT);
     if (file_id < 0) {
         fprintf(stderr, "Error opening file: %s\n", FILE_NAME);
+        free(data);
         return;
     }
 
@@ -49,6 +54,7 @@ void write_cross_section_data_to_hdf5(const double bcs[], const double fcs[])
     if (group_id < 0) {
         fprintf(stderr, "Error opening group: %s\n", GROUP_NAME);
         H5Fclose(file_id);
+        free(data);
         return;
     }
 
@@ -70,6 +76,7 @@ void write_cross_section_data_to_hdf5(const double bcs[], const double fcs[])
         H5Sclose(dataspace_id);
         H5Gclose(group_id);
         H5Fclose(file_id);
+        free(data);
         return;
     }
 
@@ -85,6 +92,7 @@ void write_cross_section_data_to_hdf5(const double bcs[], const double fcs[])
     H5Sclose(dataspace_id);
     H5Gclose(group_id);
     H5Fclose(file_id);
+    free(data);
 }
 
 void outputCross(FILE *fp)

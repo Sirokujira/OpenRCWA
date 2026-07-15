@@ -90,15 +90,20 @@ static void write_spara_data_to_hdf5()
     hid_t file_id, group_id, dataset_id, dataspace_id, datatype_id;
     herr_t status;
 
-    // spara_data_t 型のデータを保持する配列を作成
-    spara_data_t data[NFreq1][NPoint];
+    // spara_data_t 型のデータを保持する配列を作成 (MSVC は C99 VLA 非対応のため malloc で確保)
+    spara_data_t *data = (spara_data_t *)malloc((size_t)NFreq1 * NPoint * sizeof(spara_data_t));
+    if (data == NULL) {
+        fprintf(stderr, "Error allocating memory for S-parameters data\n");
+        return;
+    }
 
     // S-parameters データの計算
     for (int ifreq = 0; ifreq < NFreq1; ifreq++) {
         for (int ipoint = 0; ipoint < NPoint; ipoint++) {
             const int id = (ipoint * NFreq1) + ifreq;
-            data[ifreq][ipoint].magnitude_dB = 20 * log10(MAX(d_abs(Spara[id]), EPS2));
-            data[ifreq][ipoint].phase_deg = d_deg(Spara[id]);
+            const size_t did = (size_t)ifreq * NPoint + ipoint;
+            data[did].magnitude_dB = 20 * log10(MAX(d_abs(Spara[id]), EPS2));
+            data[did].phase_deg = d_deg(Spara[id]);
         }
     }
 
@@ -106,6 +111,7 @@ static void write_spara_data_to_hdf5()
     file_id = H5Fopen(FILE_NAME, H5F_ACC_RDWR, H5P_DEFAULT);
     if (file_id < 0) {
         fprintf(stderr, "Error opening file: %s\n", FILE_NAME);
+        free(data);
         return;
     }
 
@@ -114,6 +120,7 @@ static void write_spara_data_to_hdf5()
     if (group_id < 0) {
         fprintf(stderr, "Error opening group: %s\n", GROUP_NAME);
         H5Fclose(file_id);
+        free(data);
         return;
     }
 
@@ -134,6 +141,7 @@ static void write_spara_data_to_hdf5()
         H5Sclose(dataspace_id);
         H5Gclose(group_id);
         H5Fclose(file_id);
+        free(data);
         return;
     }
 
@@ -150,6 +158,7 @@ static void write_spara_data_to_hdf5()
     H5Sclose(dataspace_id);
     H5Gclose(group_id);
     H5Fclose(file_id);
+    free(data);
 }
 
 // .s(NPoint)p
