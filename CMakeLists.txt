@@ -13,6 +13,18 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# ── Windows (MSVC) 対応 ──────────────────────────────────────────────
+# libm は存在しない (MATH_LIB を空にする)。ソースは UTF-8 (日本語コメント)。
+# M_PI 等は _USE_MATH_DEFINES が必要。
+if(MSVC)
+    add_compile_options(/utf-8)
+    add_compile_definitions(_USE_MATH_DEFINES _CRT_SECURE_NO_WARNINGS NOMINMAX)
+    set(MATH_LIB "")
+else()
+    set(MATH_LIB m)
+endif()
+
 find_package(Threads REQUIRED)
 find_package(OpenMP REQUIRED)
 
@@ -64,8 +76,14 @@ if(MKL_FOUND)
     add_definitions(-DEIGEN_WITH_MKL_ALL -DUSE_MKL)
 else()
     message(STATUS "MKL が見つかりません。Eigen の固有値ソルバを使用します。")
-    # gdstk/utils.cpp が LAPACK (dgesv_) を直接呼ぶため、システム LAPACK で代替する
-    find_package(LAPACK REQUIRED)
+    # gdstk/utils.cpp が LAPACK (dgesv_) を直接呼ぶため、システム LAPACK で代替する。
+    # Windows には標準 LAPACK が無いため必須にしない (orcwa 本体は Eigen ソルバで
+    # 動作し、gdstk を使うのはテストバイナリのみ → WITH_RCWA=OFF で回避)
+    if(WIN32)
+        find_package(LAPACK)
+    else()
+        find_package(LAPACK REQUIRED)
+    endif()
     set(MKL_LIBRARIES ${LAPACK_LIBRARIES})
     set(MKL_INCLUDE_DIR "")
 
@@ -430,7 +448,7 @@ else()
             target_link_libraries(orcwa PRIVATE OpenMP::OpenMP_C OpenMP::OpenMP_CXX
                 m hdf5::hdf5 ${MKL_LIBRARIES} ${TBB_LIBRARIES})
         else()
-            target_link_libraries(orcwa PRIVATE m hdf5::hdf5
+            target_link_libraries(orcwa PRIVATE ${MATH_LIB} hdf5::hdf5
                 ${MKL_LIBRARIES} ${TBB_LIBRARIES})
         endif()
     endif()
@@ -452,7 +470,7 @@ if (WITH_POST)
     # Include directories for header files
     target_include_directories(orcwa_post PUBLIC "${PROJECT_SOURCE_DIR}/include")
 
-    target_link_libraries(orcwa_post PRIVATE OpenMP::OpenMP_C m hdf5::hdf5)
+    target_link_libraries(orcwa_post PRIVATE OpenMP::OpenMP_C ${MATH_LIB} hdf5::hdf5)
 endif()
 
 option(WITH_DATALIB "Build C data-creation library and samples" ON)
