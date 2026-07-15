@@ -193,7 +193,13 @@ void readhdf5() {
 
 //
     // coupling データの読み込み
-    coupling_data_t coupling_data[NFreq1][NFeed][NPoint];
+    // MSVC は VLA 非対応のためフラット malloc (レイアウトは [NFreq1][NFeed][NPoint] と同一)
+    coupling_data_t *coupling_data =
+        (coupling_data_t *)malloc((size_t)NFreq1 * NFeed * NPoint * sizeof(coupling_data_t));
+    if (coupling_data == NULL) {
+        fprintf(stderr, "Error: malloc failed (coupling_data)\n");
+        return;
+    }
 
     // coupling_data_t のデータ型を定義
     hid_t datatype_id;
@@ -210,8 +216,15 @@ void readhdf5() {
     H5Dclose(dataset_id);
     H5Tclose(datatype_id);
 
+    free(coupling_data);
+
     // s-parameters データの読み込み
-    spara_data_t spara_data[NFreq1][NPoint];
+    spara_data_t *spara_data =
+        (spara_data_t *)malloc((size_t)NFreq1 * NPoint * sizeof(spara_data_t));
+    if (spara_data == NULL) {
+        fprintf(stderr, "Error: malloc failed (spara_data)\n");
+        return;
+    }
 
     // データタイプを作成
     datatype_id = H5Tcreate(H5T_COMPOUND, sizeof(spara_data_t));
@@ -230,14 +243,16 @@ void readhdf5() {
     for (int ifreq = 0; ifreq < NFreq1; ifreq++) {
         for (int ipoint = 0; ipoint < NPoint; ipoint++) {
             const int id = (ipoint * NFreq1) + ifreq;
-            //Spara[id] = d_polar(pow(10, spara_data[ifreq][ipoint].magnitude_dB / 20), spara_data[ifreq][ipoint].phase_deg * (M_PI / 180.0));
-            const double mag = pow(10, spara_data[ifreq][ipoint].magnitude_dB / 20);
-            const double ph  = spara_data[ifreq][ipoint].phase_deg * (M_PI / 180.0);
+            //Spara[id] = d_polar(pow(10, spara_data[(size_t)ifreq * NPoint + ipoint].magnitude_dB / 20), spara_data[(size_t)ifreq * NPoint + ipoint].phase_deg * (M_PI / 180.0));
+            const double mag = pow(10, spara_data[(size_t)ifreq * NPoint + ipoint].magnitude_dB / 20);
+            const double ph  = spara_data[(size_t)ifreq * NPoint + ipoint].phase_deg * (M_PI / 180.0);
             Spara[id] = d_complex(mag * cos(ph), mag * sin(ph));
         }
     }
     H5Dclose(dataset_id);
     H5Tclose(datatype_id);
+
+    free(spara_data);
 
     // cross_section データの読み込み
 /*
@@ -261,7 +276,12 @@ void readhdf5() {
 
     // input_impedance データの読み込み
     fprintf(stdout, "input_impedance_data (start)\n");
-    input_impedance_data_t input_impedance_data[NFeed][NFreq1];
+    input_impedance_data_t *input_impedance_data =
+        (input_impedance_data_t *)malloc((size_t)NFeed * NFreq1 * sizeof(input_impedance_data_t));
+    if (input_impedance_data == NULL) {
+        fprintf(stderr, "Error: malloc failed (input_impedance_data)\n");
+        return;
+    }
     
     hid_t memtype_id;
 
@@ -286,9 +306,9 @@ void readhdf5() {
     for (int ifeed = 0; ifeed < NFeed; ifeed++) {
         for (int ifreq = 0; ifreq < NFreq1; ifreq++) {
             const int id = (ifeed * NFreq1) + ifreq;
-            Zin[id].r = input_impedance_data[ifeed][ifreq].rin;
-            Zin[id].i = input_impedance_data[ifeed][ifreq].xin;
-            Ref[id] = input_impedance_data[ifeed][ifreq].ref;
+            Zin[id].r = input_impedance_data[(size_t)ifeed * NFreq1 + ifreq].rin;
+            Zin[id].i = input_impedance_data[(size_t)ifeed * NFreq1 + ifreq].xin;
+            Ref[id] = input_impedance_data[(size_t)ifeed * NFreq1 + ifreq].ref;
         }
     }
     fprintf(stdout, "input_impedance_data (end)\n");
