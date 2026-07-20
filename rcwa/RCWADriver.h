@@ -26,5 +26,18 @@ struct RCWAResult
     std::vector<scalar> TRN_orders;
 };
 
+// 場イメージ出力の指定 (任意)。指定時は最初の波長についてのみ
+// saveFieldImage で断面 CSV を書き出す。
+struct RCWAFieldRequest
+{
+    FieldComponent component = Ez;         // 出力する場成分
+    SliceType      slice     = sliceXZ;    // スライス面
+    scalar         coord     = 0.0;        // スライス位置 [μm]
+    SaveOption     opt       = modulation; // |f| / Re / Im
+    std::string    path;                   // 出力 CSV パス
+};
+
 // prob を解き、波長ごとの R/T を返す。失敗時は空配列を返し err を設定する。
-std::vector<RCWAResult> runRCWA(const RCWAProblem& prob, std::string& err);
+// fieldReq を指定すると最初の波長で場イメージ CSV も出力する。
+std::vector<RCWAResult> runRCWA(const RCWAProblem& prob, std::string& err,
+                                const RCWAFieldRequest* fieldReq = nullptr);

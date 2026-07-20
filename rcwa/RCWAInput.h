@@ -30,7 +30,12 @@ struct RCWABox
     scalar x0, x1, y0, y1, z0, z1;   // バウンディングボックス [μm]
 
     // 点 (xc, yc) が z スラブ内でこの形状に含まれるか判定する。
+    // (z 非依存の近似判定。曲面形状は containsXYZ を推奨)
     bool containsXY(scalar xc, scalar yc) const;
+
+    // 点 (xc, yc, zc) がこの形状に含まれるか判定する (z 依存断面対応)。
+    // SPHERE: 楕円体、CYL_X/CYL_Y: 軸方向範囲 + 円形断面を正しく扱う。
+    bool containsXYZ(scalar xc, scalar yc, scalar zc) const;
 };
 
 struct RCWAProblem

@@ -53,8 +53,8 @@ scalex epsAt(const RCWAProblem& prob,
 {
     scalex e = prob.backgroundEps;
     for (const auto& b : prob.boxes) {
-        if (zc < b.z0 || zc > b.z1) continue;
-        if (!b.containsXY(xc, yc)) continue;
+        // z 依存断面 (球・x/y 軸円柱の z ごとの半径変化) を含めて判定する
+        if (!b.containsXYZ(xc, yc, zc)) continue;
         int m = b.material;
         if (m < 0 || m >= static_cast<int>(prob.materialEps.size())) continue;
         e = prob.materialEps[m];
@@ -114,9 +114,11 @@ Layer makeLayer(const RCWAProblem& prob,
 
 } // namespace
 
-std::vector<RCWAResult> runRCWA(const RCWAProblem& prob, std::string& err)
+std::vector<RCWAResult> runRCWA(const RCWAProblem& prob, std::string& err,
+                                const RCWAFieldRequest* fieldReq)
 {
     std::vector<RCWAResult> results;
+    bool fieldSaved = false;
 
     // z 層境界 (昇順) -> 上端から下端の順にスタックを作る
     std::vector<scalar> zedges = deriveZEdges(prob);
@@ -198,6 +200,19 @@ std::vector<RCWAResult> runRCWA(const RCWAProblem& prob, std::string& err)
 
             VectorXs REF, TRN;
             solver.scatterPlaneWave(cInc, refLayer, trnLayer, k0, REF, TRN);
+
+            // 場イメージ出力 (最初の波長のみ)
+            if (fieldReq && !fieldSaved && !fieldReq->path.empty()) {
+                std::vector<std::pair<int, scalex>> inputCoeffs;
+                for (int i = 0; i < cInc.size(); ++i)
+                    if (std::abs(cInc(i)) > 1e-14)
+                        inputCoeffs.emplace_back(i, cInc(i));
+                solver.saveFieldImage(fieldReq->path,
+                                      fieldReq->slice, fieldReq->coord,
+                                      fieldReq->component, fieldReq->opt,
+                                      inputCoeffs, layerStack, thickness);
+                fieldSaved = true;
+            }
 
             RCWAResult r;
             r.lambda = lambda;

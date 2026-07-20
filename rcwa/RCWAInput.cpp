@@ -1,6 +1,7 @@
 #include "rcwa/RCWAInput.h"
 
 #include <fstream>
+#include <iostream>
 #include <sstream>
 #include <algorithm>
 #include <cmath>
@@ -32,6 +33,55 @@ bool RCWABox::containsXY(scalar xc, scalar yc) const
     case RCWA_SHAPE_CYL_Y:
         // y 軸方向の円柱: XZ 断面が楕円
         return xc >= x0 && xc <= x1;
+
+    default:
+        return false;
+    }
+}
+
+// ============================================================
+// RCWABox::containsXYZ — z 依存断面を含む厳密判定
+// ============================================================
+bool RCWABox::containsXYZ(scalar xc, scalar yc, scalar zc) const
+{
+    if (zc < z0 || zc > z1) return false;
+
+    const scalar cx = 0.5*(x0+x1), cy = 0.5*(y0+y1), cz = 0.5*(z0+z1);
+    const scalar rx = 0.5*(x1-x0), ry = 0.5*(y1-y0), rz = 0.5*(z1-z0);
+
+    switch (shape) {
+    case RCWA_SHAPE_BOX:
+        return xc >= x0 && xc <= x1 && yc >= y0 && yc <= y1;
+
+    case RCWA_SHAPE_SPHERE: {
+        // 楕円体: 正規化距離の 2 乗和 ≤ 1
+        if (rx <= 0 || ry <= 0 || rz <= 0) return false;
+        scalar dx = (xc-cx)/rx, dy = (yc-cy)/ry, dz = (zc-cz)/rz;
+        return dx*dx + dy*dy + dz*dz <= 1.0;
+    }
+
+    case RCWA_SHAPE_CYL_Z: {
+        // z 軸円柱: XY 断面楕円 (z 依存なし)
+        if (rx <= 0 || ry <= 0) return false;
+        scalar dx = (xc-cx)/rx, dy = (yc-cy)/ry;
+        return dx*dx + dy*dy <= 1.0;
+    }
+
+    case RCWA_SHAPE_CYL_X: {
+        // x 軸円柱: 軸方向 x 範囲 + YZ 断面楕円
+        if (ry <= 0 || rz <= 0) return false;
+        if (xc < x0 || xc > x1) return false;
+        scalar dy = (yc-cy)/ry, dz = (zc-cz)/rz;
+        return dy*dy + dz*dz <= 1.0;
+    }
+
+    case RCWA_SHAPE_CYL_Y: {
+        // y 軸円柱: 軸方向 y 範囲 + XZ 断面楕円
+        if (rx <= 0 || rz <= 0) return false;
+        if (yc < y0 || yc > y1) return false;
+        scalar dx = (xc-cx)/rx, dz = (zc-cz)/rz;
+        return dx*dx + dz*dz <= 1.0;
+    }
 
     default:
         return false;
@@ -175,11 +225,14 @@ bool parseRCWAInput(const std::string& path, RCWAProblem& prob, std::string& err
                     box.y1 = toScalar(V(5)) * M_TO_UM;
                     box.z0 = toScalar(V(6)) * M_TO_UM;
                     box.z1 = toScalar(V(7)) * M_TO_UM;
-                    // 既知の形状のみ追加 (未対応形状は無視)
+                    // 既知の形状のみ追加 (未対応形状は警告して無視)
                     if (shape == RCWA_SHAPE_BOX    || shape == RCWA_SHAPE_SPHERE  ||
                         shape == RCWA_SHAPE_CYL_Z  || shape == RCWA_SHAPE_CYL_X  ||
                         shape == RCWA_SHAPE_CYL_Y) {
                         prob.boxes.push_back(box);
+                    } else {
+                        std::cerr << "*** 警告: 未対応の geometry 形状 shape="
+                                  << shape << " を無視します\n";
                     }
                 }
             }
@@ -194,6 +247,11 @@ bool parseRCWAInput(const std::string& path, RCWAProblem& prob, std::string& err
                 if (nv >= 2) {
                     prob.periodicX = (toInt(V(0)) != 0);
                     prob.periodicY = (toInt(V(1)) != 0);
+                    // RCWA は本質的に周期境界。非周期指定は無視されるため警告する。
+                    if (!prob.periodicX || !prob.periodicY) {
+                        std::cerr << "*** 警告: RCWA ソルバは周期境界のみ対応です"
+                                     " (pbc=0 は無視され、周期境界として扱われます)\n";
+                    }
                 }
             }
             else if (key == "rcwaorder") {
@@ -274,12 +332,25 @@ bool parseRCWAInput(const std::string& path, RCWAProblem& prob, std::string& err
 
 std::vector<scalar> deriveZEdges(const RCWAProblem& prob)
 {
+    // 断面が z に依存する曲面形状 (球, x/y 軸円柱) は、その z 範囲を
+    // 細分して階段近似する。BOX / CYL_Z は z 依存がないので端点のみ。
+    constexpr int N_CURVED_SLICES = 8;
+
     std::set<scalar> edges;
     edges.insert(prob.zmin);
     edges.insert(prob.zmax);
     for (const auto& b : prob.boxes) {
         if (b.z0 >= prob.zmin && b.z0 <= prob.zmax) edges.insert(b.z0);
         if (b.z1 >= prob.zmin && b.z1 <= prob.zmax) edges.insert(b.z1);
+
+        if (b.shape == RCWA_SHAPE_SPHERE || b.shape == RCWA_SHAPE_CYL_X ||
+            b.shape == RCWA_SHAPE_CYL_Y) {
+            for (int i = 1; i < N_CURVED_SLICES; ++i) {
+                scalar z = b.z0 + (b.z1 - b.z0) * i
+                         / static_cast<scalar>(N_CURVED_SLICES);
+                if (z >= prob.zmin && z <= prob.zmax) edges.insert(z);
+            }
+        }
     }
     return std::vector<scalar>(edges.begin(), edges.end());
 }
@@ -313,8 +384,7 @@ void sampleCrossSection1D(
         scalar xc = 0.5 * (coordX[i] + coordX[i + 1]);
         scalex e  = prob.backgroundEps;
         for (const auto& b : prob.boxes) {
-            if (zCenter < b.z0 || zCenter > b.z1) continue;
-            if (b.containsXY(xc, yc)) {
+            if (b.containsXYZ(xc, yc, zCenter)) {
                 if (b.material >= 0 &&
                     b.material < static_cast<int>(prob.materialEps.size())) {
                     e = prob.materialEps[b.material];

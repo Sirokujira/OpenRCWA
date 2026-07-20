@@ -21,6 +21,8 @@
 //   21. CYL_X/CYL_Y containsXY + deriveZEdges
 //   22. 横方向場成分 (Ex/Ey/Hx/Hy) の偏波選択則
 //   23. SaveOption 整合性: |f|² == Re² + Im²
+//   24. 球ジオメトリの z スライス化 (階段近似) + エネルギー保存
+//   25. runRCWA の場イメージ出力 (RCWAFieldRequest)
 // ============================================================
 #include <cassert>
 #include <cmath>
@@ -989,6 +991,27 @@ static void test_cyl_xy_and_zedges()
     CHECK(box.containsXY(0.5, -5.0), "CYL_Y: y ignored, x inside");
     CHECK(!box.containsXY(1.5, 0.5),  "CYL_Y: x outside");
 
+    // ---- containsXYZ: z 依存断面の厳密判定 ----
+    // SPHERE: 楕円体。中心は内側、極付近の軸外点は外側。
+    box.shape = RCWA_SHAPE_SPHERE;
+    CHECK(box.containsXYZ(0.5, 0.5, 0.5),  "XYZ SPHERE: center inside");
+    CHECK(box.containsXYZ(0.5, 0.5, 0.99), "XYZ SPHERE: on-axis near pole inside");
+    CHECK(!box.containsXYZ(0.9, 0.5, 0.9), "XYZ SPHERE: off-axis near pole outside");
+    CHECK(!box.containsXYZ(0.5, 0.5, 1.5), "XYZ SPHERE: z out of range");
+
+    // CYL_X: 軸方向 x 範囲が有効になり、(y,z) 断面が円判定になる
+    box.shape = RCWA_SHAPE_CYL_X;
+    CHECK(box.containsXYZ(0.5, 0.5, 0.5),  "XYZ CYL_X: center inside");
+    CHECK(!box.containsXYZ(-5.0, 0.5, 0.5), "XYZ CYL_X: x bounded (unlike containsXY)");
+    CHECK(!box.containsXYZ(0.5, 0.9, 0.9), "XYZ CYL_X: (y,z) corner outside circle");
+    CHECK(box.containsXYZ(0.5, 0.5, 0.99), "XYZ CYL_X: on-axis near z edge inside");
+
+    // CYL_Y: 軸方向 y 範囲 + (x,z) 断面円
+    box.shape = RCWA_SHAPE_CYL_Y;
+    CHECK(box.containsXYZ(0.5, 0.5, 0.5),  "XYZ CYL_Y: center inside");
+    CHECK(!box.containsXYZ(0.5, -5.0, 0.5), "XYZ CYL_Y: y bounded");
+    CHECK(!box.containsXYZ(0.9, 0.5, 0.9), "XYZ CYL_Y: (x,z) corner outside circle");
+
     // deriveZEdges
     RCWAProblem prob;
     prob.zmin = -1.0; prob.zmax = 2.0;
@@ -1149,6 +1172,99 @@ static void test_save_option_consistency()
 }
 
 // ============================================================
+// Test 24: 球ジオメトリの z スライス化
+// deriveZEdges が球の z 範囲を細分し (階段近似)、
+// 誘電体球を含む構造でもエネルギー保存が成立することを確認する。
+// ============================================================
+static void test_sphere_zslicing()
+{
+    static const char* name = "test_sphere_zslicing";
+    int prev_fails = g_fails;
+
+    std::string path = writeTmp("sphere", R"(
+OpenRCWA 4 2
+title = dielectric sphere z-slicing
+xmesh = -2.5e-07 10 2.5e-07
+ymesh = -2.5e-07 10 2.5e-07
+zmesh = -7e-07 10 7e-07
+material = 1 2.25 0 1 0
+geometry = 2 2 -2e-07 2e-07 -2e-07 2e-07 -2e-07 2e-07
+planewave = 0 0 1
+pbc = 1 1 0
+rcwaorder = 2 2
+frequency1 = 5.0e+14 5.0e+14 0
+end
+)");
+    RCWAProblem prob;
+    std::string err;
+    if (!parseRCWAInput(path, prob, err)) {
+        std::cerr << "  parse error: " << err << "\n"; ++g_fails; return;
+    }
+    auto edges = deriveZEdges(prob);
+    std::cout << "  z edges for sphere: " << edges.size() << "\n";
+    // zmin, zmax, 球の z0/z1, 中間分割 7 点 → 11 エッジ
+    CHECK(edges.size() >= 10, "sphere z range subdivided into slices");
+
+    auto res = runRCWA(prob, err);
+    if (res.empty()) { std::cerr << "  runRCWA error: " << err << "\n"; ++g_fails; return; }
+    double R = res[0].R, T = res[0].T;
+    std::cout << "  sphere R=" << R << " T=" << T << " R+T=" << R + T << "\n";
+    CHECK(std::abs(R + T - 1.0) < 2e-3, "sphere: energy conservation R+T≈1");
+    if (g_fails == prev_fails) std::cout << "PASS: " << name << "\n";
+    else                       std::cout << "FAIL: " << name << "\n";
+}
+
+// ============================================================
+// Test 25: runRCWA の場イメージ出力 (RCWAFieldRequest)
+// 斜め入射 TM のガラススラブで Ez 断面 CSV が生成され、
+// 有限かつ非ゼロの値を含むことを確認する。
+// ============================================================
+static void test_driver_field_output()
+{
+    static const char* name = "test_driver_field_output";
+    int prev_fails = g_fails;
+
+    std::string path = writeTmp("drvfield", R"(
+OpenRCWA 4 2
+title = driver field output
+xmesh = -2.5e-07 10 2.5e-07
+ymesh = -2.5e-07 10 2.5e-07
+zmesh = -1e-06 10 0.0 10 3e-07 10 7e-07
+material = 1 2.25 0 1 0
+geometry = 2 1 -2.5e-07 2.5e-07 -2.5e-07 2.5e-07 0 3e-07
+planewave = 30 0 1
+pbc = 1 1 0
+rcwaorder = 4 0
+wavelength = 0.6
+end
+)");
+    RCWAProblem prob;
+    std::string err;
+    if (!parseRCWAInput(path, prob, err)) {
+        std::cerr << "  parse error: " << err << "\n"; ++g_fails; return;
+    }
+
+    RCWAFieldRequest req;
+    req.component = Ez;
+    req.slice     = sliceXZ;
+    req.coord     = 0.0;
+    req.opt       = modulation;
+    req.path      = "/tmp/rcwa_driver_ez.csv";
+
+    auto res = runRCWA(prob, err, &req);
+    if (res.empty()) { std::cerr << "  runRCWA error: " << err << "\n"; ++g_fails; return; }
+
+    double ezMax = csvMaxAbs(req.path);
+    std::cout << "  driver Ez CSV: max=" << ezMax << "\n";
+    CHECK(ezMax > 1e-3, "oblique TM via driver: Ez CSV nonzero");
+    CHECK(ezMax < 1e100, "Ez values finite");
+    CHECK(std::abs(res[0].R + res[0].T - 1.0) < 2e-3,
+          "R+T≈1 unaffected by field output");
+    if (g_fails == prev_fails) std::cout << "PASS: " << name << "\n";
+    else                       std::cout << "FAIL: " << name << "\n";
+}
+
+// ============================================================
 // main
 // ============================================================
 int main()
@@ -1178,6 +1294,8 @@ int main()
     test_cyl_xy_and_zedges();
     test_transverse_fields();
     test_save_option_consistency();
+    test_sphere_zslicing();
+    test_driver_field_output();
 
     std::cout << "======================================\n";
     if (g_fails == 0)
