@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cmake -S . -B build:*)",
+      "Bash(cmake --build build:*)",
+      "Bash(./bin/tests/test_rcwa_input:*)",
+      "Bash(./bin/orcwa_rcwa:*)",
+      "Bash(git status)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Read(rcwa/**)",
+      "Read(tests/**)",
+      "Read(src/**)",
+      "Read(core/**)",
+      "Read(ci/**)"
+    ],
+    "deny": []
+  }
+}
