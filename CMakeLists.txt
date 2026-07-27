@@ -89,8 +89,11 @@ else()
 
     # LAPACKE (zgeev/cgeev) があれば、RCWA の固有値計算で
     # Eigen::ComplexEigenSolver より高速な LAPACKE 経由のソルバを使用する
-    find_path(LAPACKE_INCLUDE_DIR lapacke.h)
-    find_library(LAPACKE_LIBRARY NAMES lapacke)
+    # vcpkg (Windows) の openblas は lapacke.h を include/openblas/ に置き、
+    # LAPACKE のシンボルを openblas ライブラリ自体が持つため、探索候補に含める。
+    # Linux/macOS では従来どおり liblapacke が優先される (NAMES の順序)。
+    find_path(LAPACKE_INCLUDE_DIR lapacke.h PATH_SUFFIXES openblas lapack)
+    find_library(LAPACKE_LIBRARY NAMES lapacke openblas)
     if(LAPACKE_INCLUDE_DIR AND LAPACKE_LIBRARY)
         message(STATUS "LAPACKE が見つかりました: ${LAPACKE_LIBRARY}")
         add_definitions(-DUSE_LAPACKE)

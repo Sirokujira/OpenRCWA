@@ -185,19 +185,35 @@ jobs:
 
       # hdf5 の既定機能 szip は libaec を gitlab.dkrz.de から取得するが
       # 429 で落ちることがあるため、必要な core+zlib のみに絞る
+      # lapack (openblas 実装) は RCWA の固有値計算を LAPACKE 経路にするために導入する。
+      # Eigen フォールバックは ±m 次数の縮退固有値で基底が不良条件になりうるため、
+      # 残差検算つきの LAPACKE 経路の方が堅牢 (macOS でも同じ理由で LAPACKE を使う)。
       - name: Install dependencies (vcpkg)
-        run: vcpkg install "hdf5[core,zlib]:x64-windows-static-md" eigen3:x64-windows-static-md --recurse
+        run: vcpkg install "hdf5[core,zlib]:x64-windows-static-md" eigen3:x64-windows-static-md lapack:x64-windows-static-md --recurse
 
       - name: Set up MSVC environment
         uses: ilammy/msvc-dev-cmd@v1
 
       - name: Configure (CPU only)
-        run: >
-          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
-          -DWITH_CUDA=OFF -DWITH_MPI=OFF
-          -DWITH_RCWA=OFF
-          "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake"
-          -DVCPKG_TARGET_TRIPLET=x64-windows-static-md
+        run: |
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release `
+            -DWITH_CUDA=OFF -DWITH_MPI=OFF `
+            -DWITH_RCWA=OFF `
+            "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=x64-windows-static-md 2>&1 | Tee-Object -FilePath configure.log
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      # 固有値ソルバの経路をログに残す (LAPACKE 経路か Eigen フォールバックか)。
+      # vcpkg の lapack が LAPACKE を提供しない場合でも Eigen 経路で動作するため、
+      # ここでは失敗させずに採用された経路を明示するだけにする。
+      - name: Report eigen solver backend
+        run: |
+          $line = Select-String -Path configure.log -Pattern "LAPACKE" | Select-Object -First 1
+          if ($line -and $line.Line -match "見つかりました") {
+            Write-Host "eigen solver backend: LAPACKE ($($line.Line))"
+          } else {
+            Write-Host "eigen solver backend: Eigen fallback (LAPACKE not found)"
+          }
 
       - name: Build orcwa / orcwa_post
         run: cmake --build build
