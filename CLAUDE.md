@@ -33,8 +33,16 @@ $OLDPWD/bin/orcwa -n 2 grating.ofd && cat rcwa_efficiency.csv
 ## 移植性
 
 - C99 VLA 禁止 (MSVC)。libm は `MATH_LIB` 変数経由。
-- **Windows CI は現状 `-DWITH_RCWA=OFF`** (LAPACKE の vcpkg 導入が未対応)。
-  Windows で RCWA を有効化する変更は LAPACK 依存の解決とセット。
+- **`WITH_RCWA` が制御するのは `tests/` のテストバイナリだけ**で、orcwa 本体の
+  RCWA コア (`rcwa/*.cpp`) は常にビルドされる。Windows CI は
+  `-DWITH_RCWA=OFF` だが、**grating スモーク (エネルギー保存 |R+T-1| <= 3e-3)
+  は Windows でも実行・合格している** — RCWA は Windows でも動作する。
+  OFF にしているのは `gdstk/utils.cpp` が LAPACK の `dgesv_` を直接呼び、
+  Windows に標準 LAPACK が無いため (gdstk はテストバイナリのみが使う)。
+  Windows のテストバイナリを有効化するには vcpkg で LAPACK を導入する。
+- Windows の固有値計算は Eigen フォールバック経路 (縮退対策の対角摂動あり)。
+  LAPACKE 経路 (残差検算つき) の方が堅牢なので、vcpkg で LAPACKE を
+  入れられるなら移行が望ましい。
 - macOS は Homebrew lapack (keg-only) の LAPACKE を明示指定
   (Eigen フォールバックは縮退問題があるため LAPACKE を使う)。
 
