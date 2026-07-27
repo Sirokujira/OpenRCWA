@@ -349,8 +349,8 @@ scalex Layer::eps(scalar x, scalar y) const
 
 void Layer::generatePlaneWave(
 	const Eigen::VectorXcs& delta,
-	scalar px,
-	scalar py,
+	scalex px,
+	scalex py,
 	Eigen::VectorXcs& c)
 {
 	if (!isSolved_)

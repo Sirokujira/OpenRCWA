@@ -111,10 +111,11 @@ public:
 		const Eigen::MatrixXcs& eigvecH,
 		const Eigen::VectorXcs& gamma);
 	
+	// px/py は複素振幅 (円偏波・任意位相の偏波に対応)。scalar からは暗黙変換される。
 	void generatePlaneWave(
 		const Eigen::VectorXcs& delta,
-		scalar px,
-		scalar py,
+		scalex px,
+		scalex py,
 		Eigen::VectorXcs& c);
 	
 	void getHarmonics(

@@ -63,18 +63,29 @@ struct RCWAProblem
     std::vector<scalar> materialSigma;
 
     // Lorentz 分散パラメータ (material_dispersion キーワード)。
-    // materialEps と同サイズ。ae==0 なら非分散。
-    // eps(omega) = einf + ae^2 / (ce^2 - omega^2 - i*be*omega)
-    struct LorentzParam { scalar einf=0, ae=0, be=0, ce=0; };
-    std::vector<LorentzParam> materialDispersion;
+    // 同一材料に対して複数行を書くと極が加算される (多極モデル):
+    //   eps(omega) = einf + Σ_p ae_p^2 / (ce_p^2 - omega^2 - i*be_p*omega)
+    // ce=0 の極は Drude 項に一致する。poles が空なら非分散。
+    struct LorentzPole { scalar ae=0, be=0, ce=0; };
+    struct MaterialDispersion {
+        scalar einf = 0;
+        std::vector<LorentzPole> poles;
+        bool active() const { return !poles.empty(); }
+    };
+    // materialEps と同サイズ。
+    std::vector<MaterialDispersion> materialDispersion;
 
     // 物体形状 (box, cylinder-z, sphere など)
     std::vector<RCWABox> boxes;
 
     // 平面波入射
+    //   planewave = theta phi pol [psi]
+    //   pol: 1=TM(p), 2=TE(s), 3=psi[deg] の直線偏波 (0=TM, 90=TE),
+    //        4=右円偏波, 5=左円偏波
     scalar theta = 0;   // 入射角 θ [deg]
-    scalar phi   = 0;   // 入射角 φ [deg]
-    int    pol   = 1;   // 偏波 (1: V, 2: H)
+    scalar phi   = 0;   // 方位角 φ [deg]
+    int    pol   = 1;   // 偏波種別
+    scalar psi   = 0;   // pol=3 のときの偏波角 [deg]
 
     // 背景 (物体に覆われない領域) の誘電率
     scalex backgroundEps = scalex(1.0, 0.0);

@@ -721,6 +721,12 @@ void RCWASolver::saveFieldImage(
 	std::vector< VectorXcs > c_p;
 	evaluateIntermediateField(c_m, c_p, inputCoeffs, layerStack, thickness);
 
+	if (c_m.empty() || c_p.empty())
+	{
+		std::cerr << "Cannot save field image: no interior layer to evaluate.\n";
+		return;
+	}
+
 	scalar startCoord1 = 0.;
 	scalar L1 = 0.;
 	scalar startCoord2 = 0.;
@@ -758,6 +764,7 @@ void RCWASolver::saveFieldImage(
 
 	int nRes1 = 500;
 	int nRes2 = static_cast<int>( nRes1 * L2 / L1);
+	if (nRes2 < 1) nRes2 = 1;   // L2=0 (ゼロ除算) を避ける
 
 	scalar step1 = L1 / nRes1;
 	scalar step2 = L2 / nRes2;
@@ -891,6 +898,9 @@ void RCWASolver::saveFieldImage(
 	};
 
 	MatrixXcs field(nRes2, nRes1);
+	// 場の再構成: f(r) = Σ_mn f_mn · exp(i·(kx0 + 2πm/Lx)·x + i·(ky0 + 2πn/Ly)·y)
+	// Bloch 波数オフセット kx0_/ky0_ を含めないと斜め入射で包絡線位相が欠落し、
+	// realpart/imagpart が周期部分のみになる (|f| は影響を受けない)。
 	if (sliceType == sliceXZ || sliceType == sliceYZ)
 	{
 		for (int i = 0; i < nRes2; ++i)
@@ -904,32 +914,38 @@ void RCWASolver::saveFieldImage(
 
 			if (sliceType == sliceXZ)
 			{
+				// y を sliceCoord に固定して y 方向ハーモニクスを畳み込む
 				VectorXcs waveletY(ny_);
 				int maxY = (ny_ - 1) / 2;
+				scalar Ly = layers_[layerType]->Ly();
 				for (int n = -maxY; n <= maxY; ++n)
 				{
-					waveletY(n+maxY) 
-					= exp(scalex(0, 2.* Pi * n / layers_[layerType]->Ly() * sliceCoord));
+					waveletY(n+maxY)
+					= exp(scalex(0, (2. * Pi * n / Ly + ky0_) * sliceCoord));
 				}
 
+				// (nx_ × ny_) · (ny_) → x ハーモニクスのベクトル
 				oneDirHarmonics = harmonics2D * waveletY;
 			}
 			else if (sliceType == sliceYZ)
 			{
+				// x を sliceCoord に固定して x 方向ハーモニクスを畳み込む
 				VectorXcs waveletX(nx_);
 				int maxX = (nx_ - 1) / 2;
+				scalar Lx = layers_[layerType]->Lx();
 				for (int m = -maxX; m <= maxX; ++m)
 				{
-					waveletX(m+maxX) = 
-					exp(scalex(0, 2. * Pi * m / layers_[layerType]->Lx() * sliceCoord));
+					waveletX(m+maxX) =
+					exp(scalex(0, (2. * Pi * m / Lx + kx0_) * sliceCoord));
 				}
 
-				oneDirHarmonics = harmonics2D * waveletX;
-			}		
+				// harmonics2D は (nx_ × ny_) なので y ハーモニクスを得るには転置が必要
+				oneDirHarmonics = harmonics2D.transpose() * waveletX;
+			}
 
 			for (int j = 0; j < nRes1; ++j)
 			{
-				auto SET_FIELD = [&](int nh, scalar Lh)
+				auto SET_FIELD = [&](int nh, scalar Lh, scalar kh0)
 				{
 					scalar h = sample1(j);
 					VectorXcs waveletH(nh);
@@ -937,23 +953,24 @@ void RCWASolver::saveFieldImage(
 
 					for (int m = -maxH; m <= maxH; ++m)
 					{
-						waveletH(m + maxH) 
-						= exp(scalex(0, 2.* Pi * m / Lh * h));
+						waveletH(m + maxH)
+						= exp(scalex(0, (2. * Pi * m / Lh + kh0) * h));
 					}
 
-					field(i, j) = waveletH.dot(oneDirHarmonics);				
+					// dot() は第一引数を共役するため transpose() で内積を取る
+					field(i, j) = waveletH.transpose() * oneDirHarmonics;
 				};
 
 				if (sliceType == sliceXZ)
 				{
-					SET_FIELD(nx_, layers_[layerType]->Lx());			
+					SET_FIELD(nx_, layers_[layerType]->Lx(), kx0_);
 				}
 				else if (sliceType == sliceYZ)
 				{
-					SET_FIELD(ny_, layers_[layerType]->Ly());
+					SET_FIELD(ny_, layers_[layerType]->Ly(), ky0_);
 				}
 			}
-		}		
+		}
 	}
 	else if (sliceType == sliceXY)
 	{
@@ -973,14 +990,14 @@ void RCWASolver::saveFieldImage(
 				int maxX = (nx_ - 1) / 2;
 				for (int m = -maxX; m <= maxX; ++m)
 				{
-					waveletX(m+maxX) = exp(scalex(0, 2. * Pi * m / L1 * x));
+					waveletX(m+maxX) = exp(scalex(0, (2. * Pi * m / L1 + kx0_) * x));
 				}
 
 				VectorXcs waveletY(ny_);
 				int maxY = (ny_ - 1) / 2;
 				for (int n = -maxY; n <= maxY; ++n)
 				{
-					waveletY(n+maxY) = exp(scalex(0, 2. * Pi * n / L2 * y));
+					waveletY(n+maxY) = exp(scalex(0, (2. * Pi * n / L2 + ky0_) * y));
 				}
 
 				field(i, j) = waveletX.transpose() * harmonics2D * waveletY;
@@ -1008,6 +1025,12 @@ void RCWASolver::saveFieldImage(const std::string& filename,
 	std::vector< VectorXcs > c_p;
 	evaluateIntermediateField(c_m, c_p, inputMode, layerStack, thickness);
 
+	if (c_m.empty() || c_p.empty())
+	{
+		std::cerr << "Cannot save field image: no interior layer to evaluate.\n";
+		return;
+	}
+
 	scalar startCoord1 = 0.;
 	scalar L1 = 0.;
 	scalar startCoord2 = 0.;
@@ -1045,6 +1068,7 @@ void RCWASolver::saveFieldImage(const std::string& filename,
 
 	int nRes1 = 500;
 	int nRes2 = static_cast<int>( nRes1 * L2 / L1);
+	if (nRes2 < 1) nRes2 = 1;   // L2=0 (ゼロ除算) を避ける
 
 	scalar step1 = L1 / nRes1;
 	scalar step2 = L2 / nRes2;
@@ -1178,6 +1202,9 @@ void RCWASolver::saveFieldImage(const std::string& filename,
 	};
 
 	MatrixXcs field(nRes2, nRes1);
+	// 場の再構成: f(r) = Σ_mn f_mn · exp(i·(kx0 + 2πm/Lx)·x + i·(ky0 + 2πn/Ly)·y)
+	// Bloch 波数オフセット kx0_/ky0_ を含めないと斜め入射で包絡線位相が欠落し、
+	// realpart/imagpart が周期部分のみになる (|f| は影響を受けない)。
 	if (sliceType == sliceXZ || sliceType == sliceYZ)
 	{
 		for (int i = 0; i < nRes2; ++i)
@@ -1191,32 +1218,38 @@ void RCWASolver::saveFieldImage(const std::string& filename,
 
 			if (sliceType == sliceXZ)
 			{
+				// y を sliceCoord に固定して y 方向ハーモニクスを畳み込む
 				VectorXcs waveletY(ny_);
 				int maxY = (ny_ - 1) / 2;
+				scalar Ly = layers_[layerType]->Ly();
 				for (int n = -maxY; n <= maxY; ++n)
 				{
-					waveletY(n+maxY) 
-					= exp(scalex(0, 2.* Pi * n / layers_[layerType]->Ly() * sliceCoord));
+					waveletY(n+maxY)
+					= exp(scalex(0, (2. * Pi * n / Ly + ky0_) * sliceCoord));
 				}
 
+				// (nx_ × ny_) · (ny_) → x ハーモニクスのベクトル
 				oneDirHarmonics = harmonics2D * waveletY;
 			}
 			else if (sliceType == sliceYZ)
 			{
+				// x を sliceCoord に固定して x 方向ハーモニクスを畳み込む
 				VectorXcs waveletX(nx_);
 				int maxX = (nx_ - 1) / 2;
+				scalar Lx = layers_[layerType]->Lx();
 				for (int m = -maxX; m <= maxX; ++m)
 				{
-					waveletX(m+maxX) = 
-					exp(scalex(0, 2. * Pi * m / layers_[layerType]->Lx() * sliceCoord));
+					waveletX(m+maxX) =
+					exp(scalex(0, (2. * Pi * m / Lx + kx0_) * sliceCoord));
 				}
 
-				oneDirHarmonics = harmonics2D * waveletX;
-			}		
+				// harmonics2D は (nx_ × ny_) なので y ハーモニクスを得るには転置が必要
+				oneDirHarmonics = harmonics2D.transpose() * waveletX;
+			}
 
 			for (int j = 0; j < nRes1; ++j)
 			{
-				auto SET_FIELD = [&](int nh, scalar Lh)
+				auto SET_FIELD = [&](int nh, scalar Lh, scalar kh0)
 				{
 					scalar h = sample1(j);
 					VectorXcs waveletH(nh);
@@ -1224,23 +1257,24 @@ void RCWASolver::saveFieldImage(const std::string& filename,
 
 					for (int m = -maxH; m <= maxH; ++m)
 					{
-						waveletH(m + maxH) 
-						= exp(scalex(0, 2.* Pi * m / Lh * h));
+						waveletH(m + maxH)
+						= exp(scalex(0, (2. * Pi * m / Lh + kh0) * h));
 					}
 
-					field(i, j) = waveletH.dot(oneDirHarmonics);				
+					// dot() は第一引数を共役するため transpose() で内積を取る
+					field(i, j) = waveletH.transpose() * oneDirHarmonics;
 				};
 
 				if (sliceType == sliceXZ)
 				{
-					SET_FIELD(nx_, layers_[layerType]->Lx());			
+					SET_FIELD(nx_, layers_[layerType]->Lx(), kx0_);
 				}
 				else if (sliceType == sliceYZ)
 				{
-					SET_FIELD(ny_, layers_[layerType]->Ly());
+					SET_FIELD(ny_, layers_[layerType]->Ly(), ky0_);
 				}
 			}
-		}		
+		}
 	}
 	else if (sliceType == sliceXY)
 	{
@@ -1260,14 +1294,14 @@ void RCWASolver::saveFieldImage(const std::string& filename,
 				int maxX = (nx_ - 1) / 2;
 				for (int m = -maxX; m <= maxX; ++m)
 				{
-					waveletX(m+maxX) = exp(scalex(0, 2. * Pi * m / L1 * x));
+					waveletX(m+maxX) = exp(scalex(0, (2. * Pi * m / L1 + kx0_) * x));
 				}
 
 				VectorXcs waveletY(ny_);
 				int maxY = (ny_ - 1) / 2;
 				for (int n = -maxY; n <= maxY; ++n)
 				{
-					waveletY(n+maxY) = exp(scalex(0, 2. * Pi * n / L2 * y));
+					waveletY(n+maxY) = exp(scalex(0, (2. * Pi * n / L2 + ky0_) * y));
 				}
 
 				field(i, j) = waveletX.transpose() * harmonics2D * waveletY;
@@ -1467,6 +1501,18 @@ void RCWASolver::evaluateIntermediateField(
 	int nDim = 2 * nx_ * ny_;
 	int nL = layerStack.size();
 
+	// 中間層の場は「入射側/透過側の半無限層に挟まれた有限厚の層」に対して
+	// のみ定義される。層が 2 枚以下だと内部層が存在せず、以降の添字計算が
+	// 負インデックスになる (旧実装はここで領域外書き込みをして落ちていた)。
+	if (nL < 3)
+	{
+		std::cerr << "Intermediate field requires at least one finite-thickness "
+					 "interior layer (got " << nL << " layers)!\n";
+		c_m.clear();
+		c_p.clear();
+		return;
+	}
+
 	std::vector< MatrixXcs > S11;
 	std::vector< MatrixXcs > S12;
 	std::vector< MatrixXcs > S21;
@@ -1597,6 +1643,18 @@ void RCWASolver::evaluateIntermediateField(
 	int nDim = 2 * nx_ * ny_;
 	int nL = layerStack.size();
 
+	// 中間層の場は「入射側/透過側の半無限層に挟まれた有限厚の層」に対して
+	// のみ定義される。層が 2 枚以下だと内部層が存在せず、以降の添字計算が
+	// 負インデックスになる (旧実装はここで領域外書き込みをして落ちていた)。
+	if (nL < 3)
+	{
+		std::cerr << "Intermediate field requires at least one finite-thickness "
+					 "interior layer (got " << nL << " layers)!\n";
+		c_m.clear();
+		c_p.clear();
+		return;
+	}
+
 	std::vector< MatrixXcs > S11;
 	std::vector< MatrixXcs > S12;
 	std::vector< MatrixXcs > S21;
@@ -1701,8 +1759,8 @@ void RCWASolver::evaluateIntermediateField(
 
 
 void RCWASolver::generateHorizontalPlaneWave(
-	scalar px,
-	scalar py,
+	scalex px,
+	scalex py,
 	int layerType,
 	Eigen::VectorXcs& c)
 {

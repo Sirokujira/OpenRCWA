@@ -23,11 +23,21 @@
 //   23. SaveOption 整合性: |f|² == Re² + Im²
 //   24. 球ジオメトリの z スライス化 (階段近似) + エネルギー保存
 //   25. runRCWA の場イメージ出力 (RCWAFieldRequest)
+//   26. Bloch 包絡線位相 (斜め入射で Re/Im が振動し位相勾配が kx0 に一致)
+//   27. sliceYZ 断面 (非正方ハーモニクス 9x3 で次元不整合が起きない)
+//   28. 任意角の直線偏波 pol=3 psi (Malus 則)
+//   29. 円偏波 pol=4/5 (R = (R_TM+R_TE)/2, 非キラルで左右一致)
+//   30. 多極 Lorentz 分散の加算
+//   31. eps<1 の入射媒質 (n_inc クランプ撤廃)
+//   32. 内部層なしスタックでの場出力要求 (旧 segfault の回帰テスト)
 // ============================================================
+#include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <iomanip>
 #include <sstream>
 #include <iostream>
 #include <stdexcept>
@@ -290,12 +300,17 @@ end
     CHECK(prob.materialDispersion.size() >= 3, "dispersion vector includes material 2");
     if (prob.materialDispersion.size() >= 3) {
         const auto& d = prob.materialDispersion[2];
-        std::cout << "  einf=" << d.einf << " ae=" << d.ae
-                  << " be=" << d.be << " ce=" << d.ce << "\n";
-        CHECK(std::abs(d.einf - 1.0) < 1e-9, "einf=1.0");
-        CHECK(std::abs(d.ae - 1.37e16) < 1e12, "ae=1.37e16");
-        CHECK(std::abs(d.be - 2.73e13) < 1e10, "be=2.73e13");
-        CHECK(d.ce == 0.0, "ce=0 (Drude model)");
+        CHECK(d.active(), "material 2 marked dispersive");
+        CHECK(d.poles.size() == 1, "single pole parsed");
+        if (d.poles.size() == 1) {
+            const auto& p = d.poles[0];
+            std::cout << "  einf=" << d.einf << " ae=" << p.ae
+                      << " be=" << p.be << " ce=" << p.ce << "\n";
+            CHECK(std::abs(d.einf - 1.0) < 1e-9, "einf=1.0");
+            CHECK(std::abs(p.ae - 1.37e16) < 1e12, "ae=1.37e16");
+            CHECK(std::abs(p.be - 2.73e13) < 1e10, "be=2.73e13");
+            CHECK(p.ce == 0.0, "ce=0 (Drude model)");
+        }
     }
     if (g_fails == prev_fails) std::cout << "PASS: " << name << "\n";
     else                       std::cout << "FAIL: " << name << "\n";
@@ -638,20 +653,27 @@ static void test_longitudinal_fields()
 // TM/TE 偏波テスト用ヘルパー
 // ============================================================
 
-// Fresnel 反射率の解析解 (入射側 n1=1, 透過側 n)。
+// Fresnel 反射率の解析解 (入射側 n1, 透過側 n2)。
 // pol=1: TM (p 偏波), pol=2: TE (s 偏波)。
-static double fresnelR(double thetaDeg, double n, int pol)
+static double fresnelR2(double thetaDeg, double n1, double n2, int pol)
 {
     const double th  = thetaDeg * M_PI / 180.0;
     const double ct  = std::cos(th);
     const double st  = std::sin(th);
-    const double ctt = std::sqrt(1.0 - (st / n) * (st / n));  // cosθt
+    const double s2  = n1 * st / n2;                    // sinθt
+    const double ctt = std::sqrt(1.0 - s2 * s2);        // cosθt
     double r;
-    if (pol == 2)  // TE: r_s = (cosθ − n·cosθt)/(cosθ + n·cosθt)
-        r = (ct - n * ctt) / (ct + n * ctt);
-    else           // TM: r_p = (n·cosθ − cosθt)/(n·cosθ + cosθt)
-        r = (n * ct - ctt) / (n * ct + ctt);
+    if (pol == 2)  // TE: r_s = (n1·cosθ − n2·cosθt)/(n1·cosθ + n2·cosθt)
+        r = (n1 * ct - n2 * ctt) / (n1 * ct + n2 * ctt);
+    else           // TM: r_p = (n2·cosθ − n1·cosθt)/(n2·cosθ + n1·cosθt)
+        r = (n2 * ct - n1 * ctt) / (n2 * ct + n1 * ctt);
     return r * r;
+}
+
+// 入射側が空気 (n1=1) の場合の省略形。
+static double fresnelR(double thetaDeg, double n, int pol)
+{
+    return fresnelR2(thetaDeg, 1.0, n, pol);
 }
 
 // air→glass 半無限界面の .orcwa を theta/phi/pol を差し替えて生成する。
@@ -1038,12 +1060,13 @@ static void test_cyl_xy_and_zedges()
 // ============================================================
 static void saveUniformFieldCSV(double thetaDeg, int pol,
                                 FieldComponent comp, SaveOption opt,
-                                const std::string& path)
+                                const std::string& path,
+                                SliceType slice = sliceXZ, int nHy = 0)
 {
     const double lambda = 0.6, Lx = 0.5, Ly = 0.5, slab = 0.3;
     const int nHx = 4;
 
-    RCWASolver solver(nHx, 0);
+    RCWASolver solver(nHx, nHy);
     solver.disablePML();
     solver.addLayer(makeUniformLayer(1.0,  Lx, Ly));
     solver.addLayer(makeUniformLayer(2.25, Lx, Ly));
@@ -1067,8 +1090,23 @@ static void saveUniformFieldCSV(double thetaDeg, int pol,
         if (std::abs(cInc(i)) > 1e-14)
             inputCoeffs.emplace_back(i, cInc(i));
 
-    solver.saveFieldImage(path, sliceXZ, 0.0, comp, opt,
+    solver.saveFieldImage(path, slice, 0.0, comp, opt,
                           inputCoeffs, stack, thick);
+}
+
+// CSV の指定行を数値配列として読む (見つからなければ空)。
+static std::vector<double> csvReadRow(const std::string& path, int row)
+{
+    std::ifstream f(path);
+    std::string line;
+    for (int i = 0; i <= row; ++i)
+        if (!std::getline(f, line)) return {};
+    std::vector<double> vals;
+    std::stringstream ss(line);
+    std::string tok;
+    while (std::getline(ss, tok, ','))
+        try { vals.push_back(std::stod(tok)); } catch (...) {}
+    return vals;
 }
 
 // CSV 内の全数値を行優先の一次元配列として読む。
@@ -1265,6 +1303,387 @@ end
 }
 
 // ============================================================
+// Test 26: Bloch 包絡線位相
+// 一様スタックの斜め入射では基本次数のみ励起されるため、周期部分は x に依らず
+// 一定。したがって場の x 依存性は Bloch 因子 exp(i·kx0·x) がすべてであり:
+//   - realpart は x 方向に振動する (旧実装では定数だった)
+//   - 位相は x に対して kx0 の傾きで直線的に増加する
+// ============================================================
+static void test_bloch_envelope_phase()
+{
+    static const char* name = "test_bloch_envelope_phase";
+    int prev_fails = g_fails;
+
+    const double lambda = 0.6, Lx = 0.5, thetaDeg = 30.0;
+    const double kx0 = (2.0 * M_PI / lambda) * std::sin(thetaDeg * M_PI / 180.0);
+
+    // (1) 法線入射: kx0=0 なので realpart は x 方向に一定
+    saveUniformFieldCSV(0.0, 1, Ex, realpart, "/tmp/rcwa_t26_re0.csv");
+    auto row0 = csvReadRow("/tmp/rcwa_t26_re0.csv", 0);
+    CHECK(!row0.empty(), "normal-incidence CSV readable");
+    if (!row0.empty()) {
+        double lo = *std::min_element(row0.begin(), row0.end());
+        double hi = *std::max_element(row0.begin(), row0.end());
+        std::cout << "  normal Re(Ex) range: [" << lo << ", " << hi << "]\n";
+        CHECK(hi - lo < 1e-6, "normal incidence: Re(Ex) constant in x");
+    }
+
+    // (2) 斜め入射: realpart が振動する
+    saveUniformFieldCSV(thetaDeg, 1, Ex, realpart, "/tmp/rcwa_t26_re.csv");
+    saveUniformFieldCSV(thetaDeg, 1, Ex, imagpart, "/tmp/rcwa_t26_im.csv");
+    saveUniformFieldCSV(thetaDeg, 1, Ex, modulation, "/tmp/rcwa_t26_mod.csv");
+    auto re = csvReadRow("/tmp/rcwa_t26_re.csv", 0);
+    auto im = csvReadRow("/tmp/rcwa_t26_im.csv", 0);
+    auto md = csvReadRow("/tmp/rcwa_t26_mod.csv", 0);
+    CHECK(re.size() > 2 && re.size() == im.size() && re.size() == md.size(),
+          "oblique CSV rows same length");
+    if (re.size() > 2 && re.size() == im.size() && re.size() == md.size()) {
+        double lo = *std::min_element(re.begin(), re.end());
+        double hi = *std::max_element(re.begin(), re.end());
+        std::cout << "  oblique Re(Ex) range: [" << lo << ", " << hi << "]\n";
+        CHECK(hi - lo > 1e-2, "oblique: Re(Ex) varies in x (Bloch envelope present)");
+
+        // |f| は Bloch 因子で変わらない (一様層なので x 方向に一定)
+        double mlo = *std::min_element(md.begin(), md.end());
+        double mhi = *std::max_element(md.begin(), md.end());
+        CHECK(mhi - mlo < 1e-6, "modulation unaffected by Bloch factor");
+
+        // 位相の傾きが kx0 に一致することを確認 (両端の位相差)
+        const int n = static_cast<int>(re.size());
+        const double step = Lx / n;
+        const double dx = step * (n - 1);
+        double ph0 = std::atan2(im[0], re[0]);
+        double ph1 = std::atan2(im[n-1], re[n-1]);
+        double dphi = ph1 - ph0;
+        while (dphi >  M_PI) dphi -= 2.0 * M_PI;
+        while (dphi < -M_PI) dphi += 2.0 * M_PI;
+        const double expected = kx0 * dx;
+        std::cout << "  phase slope: dphi=" << dphi
+                  << " expected=" << expected << " (kx0=" << kx0 << ")\n";
+        CHECK(std::abs(dphi - expected) < 1e-3,
+              "phase advances as exp(+i*kx0*x) with correct sign and magnitude");
+    }
+    if (g_fails == prev_fails) std::cout << "PASS: " << name << "\n";
+    else                       std::cout << "FAIL: " << name << "\n";
+}
+
+// ============================================================
+// Test 27: sliceYZ 断面出力
+// harmonics2D は (nx_ × ny_) なので YZ 断面では転置してから畳み込む必要がある。
+// nx_≠ny_ (nHx=4, nHy=1 → 9×3) で次元不整合が起きないことを確認する。
+// ============================================================
+static void test_slice_yz()
+{
+    static const char* name = "test_slice_yz";
+    int prev_fails = g_fails;
+
+    // nHy=1 → ny_=3, nHx=4 → nx_=9 (非正方)
+    saveUniformFieldCSV(0.0, 1, Ex, modulation, "/tmp/rcwa_t27_yz.csv", sliceYZ, 1);
+    double mx = csvMaxAbs("/tmp/rcwa_t27_yz.csv");
+    auto row = csvReadRow("/tmp/rcwa_t27_yz.csv", 0);
+    std::cout << "  sliceYZ (nx_=9, ny_=3): max=" << mx
+              << " cols=" << row.size() << "\n";
+    CHECK(mx > 0.5,   "sliceYZ: Ex nonzero");
+    CHECK(mx < 1e100, "sliceYZ: values finite");
+    CHECK(!row.empty(), "sliceYZ: CSV has data");
+
+    // XZ 断面と同じ振幅になるはず (一様層の法線入射なので断面によらない)
+    saveUniformFieldCSV(0.0, 1, Ex, modulation, "/tmp/rcwa_t27_xz.csv", sliceXZ, 1);
+    double mxz = csvMaxAbs("/tmp/rcwa_t27_xz.csv");
+    std::cout << "  sliceXZ max=" << mxz << "\n";
+    CHECK(std::abs(mx - mxz) < 1e-6, "uniform layer: |Ex| same on YZ and XZ slices");
+
+    if (g_fails == prev_fails) std::cout << "PASS: " << name << "\n";
+    else                       std::cout << "FAIL: " << name << "\n";
+}
+
+// ============================================================
+// Test 28: 任意角の直線偏波 (pol=3, psi)
+// 一様界面では TM/TE が結合しないので Malus 則が成り立つ:
+//   R(psi) = cos²psi·R_TM + sin²psi·R_TE
+// psi=0 は pol=1 と、psi=90 は pol=2 と厳密に一致する。
+// ============================================================
+static void test_linear_polarization_angle()
+{
+    static const char* name = "test_linear_polarization_angle";
+    int prev_fails = g_fails;
+    const double thB = 56.31;  // Brewster 角: R_TM≈0
+
+    auto runPsi = [&](int pol, double psi) -> double {
+        std::ostringstream os;
+        os << "OpenRCWA 4 2\n"
+              "title = polarization angle\n"
+              "xmesh = -5e-07 10 5e-07\n"
+              "ymesh = -5e-07 10 5e-07\n"
+              "zmesh = -5e-07 10 0.0 10 1e-06\n"
+              "material = 1 2.25 0 1 0\n"
+              "geometry = 2 1 -5e-07 5e-07 -5e-07 5e-07 -5e-07 0\n"
+              "planewave = " << thB << " 0 " << pol << " " << psi << "\n"
+              "pbc = 1 1 0\n"
+              "rcwaorder = 4 0\n"
+              "frequency1 = 5.0e+14 5.0e+14 0\n"
+              "end\n";
+        std::string tag = "psi_" + std::to_string(pol) + "_" + std::to_string(int(psi));
+        auto res = solve(tag, os.str());
+        if (res.empty()) { ++g_fails; return -1.0; }
+        CHECK(std::abs(res[0].R + res[0].T - 1.0) < 2e-3,
+              std::string("energy conservation at psi=") + std::to_string(psi));
+        return res[0].R;
+    };
+
+    const double R_TM = runPsi(1, 0.0);
+    const double R_TE = runPsi(2, 0.0);
+    std::cout << "  R_TM=" << R_TM << " R_TE=" << R_TE << "\n";
+
+    // psi=0 → TM と一致、psi=90 → TE と一致
+    double r0  = runPsi(3, 0.0);
+    double r90 = runPsi(3, 90.0);
+    std::cout << "  pol=3 psi=0: R=" << r0 << "  psi=90: R=" << r90 << "\n";
+    CHECK(std::abs(r0  - R_TM) < 1e-9, "pol=3 psi=0 identical to TM");
+    CHECK(std::abs(r90 - R_TE) < 1e-9, "pol=3 psi=90 identical to TE");
+
+    // 中間角: Malus 則
+    for (double psi : {30.0, 45.0, 60.0}) {
+        double r = runPsi(3, psi);
+        double c = std::cos(psi * M_PI / 180.0), s = std::sin(psi * M_PI / 180.0);
+        double ref = c * c * R_TM + s * s * R_TE;
+        std::cout << "  psi=" << psi << ": R=" << r << " (Malus " << ref << ")\n";
+        CHECK(std::abs(r - ref) < 1e-6,
+              std::string("Malus law at psi=") + std::to_string(psi));
+    }
+    if (g_fails == prev_fails) std::cout << "PASS: " << name << "\n";
+    else                       std::cout << "FAIL: " << name << "\n";
+}
+
+// ============================================================
+// Test 29: 円偏波 (pol=4 右, pol=5 左)
+// 非キラルな一様界面では R_circ = (R_TM + R_TE)/2 で左右は同一。
+// ============================================================
+static void test_circular_polarization()
+{
+    static const char* name = "test_circular_polarization";
+    int prev_fails = g_fails;
+    const double thB = 56.31;
+
+    auto runPol = [&](int pol) -> double {
+        std::ostringstream os;
+        os << "OpenRCWA 4 2\n"
+              "title = circular polarization\n"
+              "xmesh = -5e-07 10 5e-07\n"
+              "ymesh = -5e-07 10 5e-07\n"
+              "zmesh = -5e-07 10 0.0 10 1e-06\n"
+              "material = 1 2.25 0 1 0\n"
+              "geometry = 2 1 -5e-07 5e-07 -5e-07 5e-07 -5e-07 0\n"
+              "planewave = " << thB << " 0 " << pol << "\n"
+              "pbc = 1 1 0\n"
+              "rcwaorder = 4 0\n"
+              "frequency1 = 5.0e+14 5.0e+14 0\n"
+              "end\n";
+        auto res = solve("circ_" + std::to_string(pol), os.str());
+        if (res.empty()) { ++g_fails; return -1.0; }
+        CHECK(std::abs(res[0].R + res[0].T - 1.0) < 2e-3,
+              std::string("circular energy conservation pol=") + std::to_string(pol));
+        return res[0].R;
+    };
+
+    const double R_TM = runPol(1), R_TE = runPol(2);
+    const double rcp  = runPol(4), lcp = runPol(5);
+    const double ref  = 0.5 * (R_TM + R_TE);
+    std::cout << "  RCP=" << rcp << " LCP=" << lcp
+              << " (expected " << ref << ")\n";
+    CHECK(std::abs(rcp - ref) < 1e-6, "RCP: R = (R_TM + R_TE)/2");
+    CHECK(std::abs(lcp - ref) < 1e-6, "LCP: R = (R_TM + R_TE)/2");
+    CHECK(std::abs(rcp - lcp) < 1e-12, "achiral structure: RCP == LCP");
+    if (g_fails == prev_fails) std::cout << "PASS: " << name << "\n";
+    else                       std::cout << "FAIL: " << name << "\n";
+}
+
+// ============================================================
+// Test 30: 多極 Lorentz 分散の加算
+// Drude 極 (be=ce=0) では eps = einf − ae²/ω² なので、
+// ae=A の 1 極と ae=A/√2 の 2 極は厳密に同じ eps を与える。
+// 極が加算されず上書きされていれば結果が食い違う。
+// ============================================================
+static void test_multipole_dispersion()
+{
+    static const char* name = "test_multipole_dispersion";
+    int prev_fails = g_fails;
+    // λ=0.6 μm での ω ≈ 3.14e15。ae = ω/2 とすると eps ≈ 1 − 0.25 = 0.75 で
+    // 透明領域に入り、R が eps に敏感な中間値になる (飽和した R=1 だと
+    // 極の加算漏れを検出できない)。
+    const double A = 0.5 * 2.0 * M_PI * 2.99792458e14 / 0.6;
+
+    auto runPoles = [&](const std::string& dispersionLines,
+                        const std::string& tag) -> double {
+        std::ostringstream os;
+        os << "OpenRCWA 4 2\n"
+              "title = multipole dispersion\n"
+              "xmesh = -2.5e-07 10 2.5e-07\n"
+              "ymesh = -2.5e-07 10 2.5e-07\n"
+              "zmesh = -1e-06 10 0.0 10 3e-07 10 7e-07\n"
+              "material = 1 2.25 0 1 0\n"
+           << dispersionLines <<
+              "geometry = 2 1 -2.5e-07 2.5e-07 -2.5e-07 2.5e-07 0 3e-07\n"
+              "planewave = 0 0 1\n"
+              "pbc = 1 1 0\n"
+              "rcwaorder = 4 0\n"
+              "wavelength = 0.6\n"
+              "end\n";
+        auto res = solve(tag, os.str());
+        if (res.empty()) { ++g_fails; return -1.0; }
+        return res[0].R;
+    };
+
+    // 既定精度 (6 桁) では A/√2 が丸められ、2 極の和が 1 極と厳密に一致しない。
+    // 極の加算そのものを検証したいので full precision で書き出す。
+    std::ostringstream one, two;
+    one << std::setprecision(17);
+    two << std::setprecision(17);
+    one << "material_dispersion = 2 1.0 " << A << " 0.0 0.0\n";
+    const double Ahalf = A / std::sqrt(2.0);
+    two << "material_dispersion = 2 1.0 " << Ahalf << " 0.0 0.0\n"
+        << "material_dispersion = 2 1.0 " << Ahalf << " 0.0 0.0\n";
+
+    // パース段階で極が 2 本入っていることを確認
+    {
+        std::ostringstream os;
+        os << "OpenRCWA 4 2\ntitle = t\n"
+              "xmesh = -2.5e-07 10 2.5e-07\nymesh = -2.5e-07 10 2.5e-07\n"
+              "zmesh = -3e-07 10 0.0 10 7e-07\nmaterial = 1 2.25 0 1 0\n"
+           << two.str() << "planewave = 0 0 1\npbc = 1 1 0\n"
+              "rcwaorder = 2 0\nwavelength = 0.6\nend\n";
+        std::string path = writeTmp("twopole_parse", os.str());
+        RCWAProblem p; std::string err;
+        if (parseRCWAInput(path, p, err) && p.materialDispersion.size() > 2) {
+            std::cout << "  poles parsed: " << p.materialDispersion[2].poles.size() << "\n";
+            CHECK(p.materialDispersion[2].poles.size() == 2, "two poles accumulated");
+        } else { ++g_fails; }
+    }
+
+    // 加算漏れ (上書き) の場合に得られる値 = 単一の A/√2 極
+    std::ostringstream half;
+    half << std::setprecision(17);
+    half << "material_dispersion = 2 1.0 " << Ahalf << " 0.0 0.0\n";
+
+    double r1 = runPoles(one.str(),  "pole1");
+    double r2 = runPoles(two.str(),  "pole2");
+    double rh = runPoles(half.str(), "polehalf");
+    std::cout << "  1 pole (ae=A): R=" << r1
+              << "   2 poles (ae=A/sqrt2): R=" << r2
+              << "   1 pole (ae=A/sqrt2): R=" << rh << "\n";
+    CHECK(r1 > 1e-4 && r1 < 0.5, "R in a sensitive (non-saturated) range");
+    CHECK(std::abs(r1 - r2) < 1e-9, "two half-strength poles == one full pole");
+    // 上書き実装なら r2 は rh に一致してしまう — 判別力があることを確認する
+    CHECK(std::abs(r1 - rh) > 1e-4, "test discriminates: half-strength pole differs");
+    if (g_fails == prev_fails) std::cout << "PASS: " << name << "\n";
+    else                       std::cout << "FAIL: " << name << "\n";
+}
+
+// ============================================================
+// Test 31: eps<1 の入射媒質
+// 旧実装は n_inc を 1 でクランプしていたため、eps<1 の媒質から斜め入射すると
+// Bloch 波数 kx0 が過大になり Fresnel 解と食い違っていた。
+// background=0.5 (n1≈0.7071) → ガラス (n2=1.5) の界面で検証する。
+// ============================================================
+static void test_low_index_incidence()
+{
+    static const char* name = "test_low_index_incidence";
+    int prev_fails = g_fails;
+    const double eps1 = 0.5, n1 = std::sqrt(eps1), n2 = 1.5;
+    const double thetaDeg = 30.0;
+
+    for (int pol = 1; pol <= 2; ++pol) {
+        std::ostringstream os;
+        os << "OpenRCWA 4 2\n"
+              "title = low-index incidence\n"
+              "xmesh = -2.5e-07 10 2.5e-07\n"
+              "ymesh = -2.5e-07 10 2.5e-07\n"
+              "zmesh = -5e-07 10 0.0 10 1e-06\n"
+              "background = " << eps1 << "\n"
+              "material = 1 2.25 0 1 0\n"
+              "geometry = 2 1 -2.5e-07 2.5e-07 -2.5e-07 2.5e-07 -5e-07 0\n"
+              "planewave = " << thetaDeg << " 0 " << pol << "\n"
+              "pbc = 1 1 0\n"
+              "rcwaorder = 4 0\n"
+              "wavelength = 0.6\n"
+              "end\n";
+        auto res = solve("lowidx_" + std::to_string(pol), os.str());
+        if (res.empty()) { std::cerr << "  FAIL: solve pol=" << pol << "\n"; ++g_fails; continue; }
+        double R = res[0].R, T = res[0].T;
+        double ref = fresnelR2(thetaDeg, n1, n2, pol);
+        std::cout << "  n1=" << n1 << " " << (pol == 2 ? "TE" : "TM")
+                  << ": R=" << R << " (analytic " << ref << ")"
+                  << " R+T=" << R + T << "\n";
+        CHECK(std::abs(R - ref) < 2e-3,
+              std::string("low-index incidence matches Fresnel pol=") + std::to_string(pol));
+        CHECK(std::abs(R + T - 1.0) < 2e-3,
+              std::string("low-index energy conservation pol=") + std::to_string(pol));
+    }
+    if (g_fails == prev_fails) std::cout << "PASS: " << name << "\n";
+    else                       std::cout << "FAIL: " << name << "\n";
+}
+
+// ============================================================
+// Test 32: 内部層のないスタックでの場出力要求
+// zmesh が 2 層 (入射側/透過側の半無限層のみ) しか作らない場合、
+// 中間層の場は定義されない。旧実装は c_m[-1] へ書き込んで segfault した。
+// R/T 自体は計算できるので、場出力を要求したときだけエラーにする。
+// ============================================================
+static void test_field_request_without_interior_layer()
+{
+    static const char* name = "test_field_request_without_interior_layer";
+    int prev_fails = g_fails;
+
+    const char* input = R"(
+OpenRCWA 4 2
+title = two-layer stack
+xmesh = -5e-07 10 5e-07
+ymesh = -5e-07 10 5e-07
+zmesh = -5e-07 10 0.0 10 1e-06
+material = 1 2.25 0 1 0
+geometry = 2 1 -5e-07 5e-07 -5e-07 5e-07 -5e-07 0
+planewave = 0 0 1
+pbc = 1 1 0
+rcwaorder = 4 0
+wavelength = 0.6
+end
+)";
+
+    // (a) 場出力なし → 通常どおり解ける
+    {
+        auto res = solve("nointerior_plain", input);
+        CHECK(!res.empty(), "two-layer stack still solves for R/T");
+        if (!res.empty()) {
+            std::cout << "  two-layer R=" << res[0].R << " T=" << res[0].T << "\n";
+            CHECK(std::abs(res[0].R - 0.04) < 2e-3, "two-layer R matches Fresnel");
+        }
+    }
+
+    // (b) 場出力あり → クラッシュせずエラーを返す
+    {
+        std::string path = writeTmp("nointerior_field", input);
+        RCWAProblem prob;
+        std::string err;
+        CHECK(parseRCWAInput(path, prob, err), "parse succeeds");
+
+        RCWAFieldRequest req;
+        req.component = Ez;
+        req.slice     = sliceXZ;
+        req.path      = "/tmp/rcwa_t32_should_not_exist.csv";
+        std::remove(req.path.c_str());
+
+        err.clear();
+        auto res = runRCWA(prob, err, &req);
+        std::cout << "  field request: results=" << res.size()
+                  << " err=\"" << err << "\"\n";
+        CHECK(res.empty(), "field request without interior layer is rejected");
+        CHECK(!err.empty(), "error message set");
+    }
+    if (g_fails == prev_fails) std::cout << "PASS: " << name << "\n";
+    else                       std::cout << "FAIL: " << name << "\n";
+}
+
+// ============================================================
 // main
 // ============================================================
 int main()
@@ -1296,6 +1715,13 @@ int main()
     test_save_option_consistency();
     test_sphere_zslicing();
     test_driver_field_output();
+    test_bloch_envelope_phase();
+    test_slice_yz();
+    test_linear_polarization_angle();
+    test_circular_polarization();
+    test_multipole_dispersion();
+    test_low_index_incidence();
+    test_field_request_without_interior_layer();
 
     std::cout << "======================================\n";
     if (g_fails == 0)

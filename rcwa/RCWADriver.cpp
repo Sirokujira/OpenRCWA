@@ -58,27 +58,29 @@ scalex epsAt(const RCWAProblem& prob,
         int m = b.material;
         if (m < 0 || m >= static_cast<int>(prob.materialEps.size())) continue;
         e = prob.materialEps[m];
-        // 導電率による損失項: Δε_im = -σ/(ω·ε₀)
-        // Lorentz 分散モデル: eps(omega) = einf + ae^2/(ce^2-omega^2-i*be*omega)
-        if (!prob.materialDispersion.empty() &&
-            m < static_cast<int>(prob.materialDispersion.size())) {
+
+        const scalar omega = 2.0 * Pi * C0_UM / lambda;  // [rad/s]
+
+        // 多極 Lorentz 分散: eps = einf + Σ_p ae_p²/(ce_p²-ω²-i·be_p·ω)
+        // 分散が指定された材料では静的 eps ではなくこの式を用いる。
+        if (m < static_cast<int>(prob.materialDispersion.size())) {
             const auto& d = prob.materialDispersion[m];
-            if (d.ae != 0.0) {
-                scalar omega = 2.0 * Pi * C0_UM / lambda;
-                scalex denom = scalex(d.ce*d.ce - omega*omega, -d.be*omega);
-                e = scalex(d.einf, 0.0) + scalex(d.ae*d.ae, 0.0) / denom;
-                return e;  // dispersion overrides static eps; skip conductivity term
+            if (d.active()) {
+                e = scalex(d.einf, 0.0);
+                for (const auto& p : d.poles)
+                    e += scalex(p.ae * p.ae, 0.0)
+                       / scalex(p.ce * p.ce - omega * omega, -p.be * omega);
             }
         }
+
         // 導電率による損失項: Δε_im = +σ/(ω·ε₀)
         // 本ソルバの時間規約 exp(-iωt) では損失媒質は正の虚部を持つ
         // (Lorentz 分散式 ce²-ω²-i·be·ω が正虚部を返すのと同一規約)。
-        if (!prob.materialSigma.empty() && m < static_cast<int>(prob.materialSigma.size())) {
+        // 分散極とは独立に加算する (両方指定すれば両方効く)。
+        if (m < static_cast<int>(prob.materialSigma.size())) {
             scalar sigma = prob.materialSigma[m];
-            if (sigma != 0.0) {
-                scalar omega = 2.0 * Pi * C0_UM / lambda; // [rad/s]
+            if (sigma != 0.0)
                 e += scalex(0.0, sigma / (omega * EPS0));
-            }
         }
     }
     return e;
@@ -127,6 +129,14 @@ std::vector<RCWAResult> runRCWA(const RCWAProblem& prob, std::string& err,
         return results;
     }
 
+    // 場イメージは半無限層に挟まれた有限厚の内部層に対してのみ定義される。
+    // 層数 = zedges.size()-1 なので、内部層を持つには 3 層以上が必要。
+    if (fieldReq && !fieldReq->path.empty() && zedges.size() - 1 < 3) {
+        err = "場イメージ出力には内部層が必要です "
+              "(zmesh / geometry を 3 層以上に分割してください)";
+        return results;
+    }
+
     std::vector<scalar> xgrid = buildCommonXGrid(prob);
     std::vector<scalar> ygrid = buildCommonYGrid(prob);
 
@@ -145,22 +155,49 @@ std::vector<RCWAResult> runRCWA(const RCWAProblem& prob, std::string& err,
     const scalar phiRad   = prob.phi   * Pi / 180.0;
 
     // 入射 E 場の横 (xy) 成分ベクトル。単位振幅 (|E_inc_3D|² = 1) に正規化する。
-    //   pol=1 (TM / p 偏波): E は入射面内 → 横成分 = (cosθ·cosφ, cosθ·sinφ)
-    //   pol=2 (TE / s 偏波): E ⊥ 入射面   → 横成分 = (−sinφ, cosφ)
+    // 直交する単位偏波基底の横成分:
+    //   TM (p 偏波): E は入射面内 → (cosθ·cosφ, cosθ·sinφ)   [Ez = −sinθ]
+    //   TE (s 偏波): E ⊥ 入射面   → (−sinφ, cosφ)            [Ez = 0]
     // 法線入射 (θ≈0) では TE/TM が縮退するため単純な x/y 方向を使う。
-    scalar px, py;
+    scalar tmX, tmY, teX, teY;
     if (std::abs(std::sin(thetaRad)) < 1e-9) {
-        px = (prob.pol == 2) ? 0.0 : 1.0;
-        py = (prob.pol == 2) ? 1.0 : 0.0;
-    } else if (prob.pol == 2) {
-        // TE: E ⊥ 入射面 → (-sinφ, cosφ)、z 成分なし
-        px = -std::sin(phiRad);
-        py =  std::cos(phiRad);
+        tmX = 1.0; tmY = 0.0;
+        teX = 0.0; teY = 1.0;
     } else {
-        // TM: E ∥ 入射面 → 横成分 (cosθ·cosφ, cosθ·sinφ), Ez = −sinθ
-        px = std::cos(thetaRad) * std::cos(phiRad);
-        py = std::cos(thetaRad) * std::sin(phiRad);
+        tmX = std::cos(thetaRad) * std::cos(phiRad);
+        tmY = std::cos(thetaRad) * std::sin(phiRad);
+        teX = -std::sin(phiRad);
+        teY =  std::cos(phiRad);
     }
+
+    // 偏波種別ごとの複素展開係数 (a_TM, a_TE)。|a_TM|² + |a_TE|² = 1 に保つ。
+    // 基底は直交するので、この規格化で |E_inc_3D| = 1 が維持される。
+    const scalar invSqrt2 = 1.0 / std::sqrt(scalar(2.0));
+    scalex aTM, aTE;
+    switch (prob.pol) {
+    case 2:  // TE (s)
+        aTM = 0.0; aTE = 1.0;
+        break;
+    case 3: { // psi [deg] の直線偏波 (0=TM, 90=TE)
+        const scalar psiRad = prob.psi * Pi / 180.0;
+        aTM = std::cos(psiRad);
+        aTE = std::sin(psiRad);
+        break;
+    }
+    case 4:  // 右円偏波
+        aTM = invSqrt2; aTE = scalex(0.0, invSqrt2);
+        break;
+    case 5:  // 左円偏波
+        aTM = invSqrt2; aTE = scalex(0.0, -invSqrt2);
+        break;
+    case 1:
+    default: // TM (p)
+        aTM = 1.0; aTE = 0.0;
+        break;
+    }
+
+    const scalex px = aTM * tmX + aTE * teX;
+    const scalex py = aTM * tmY + aTE * teY;
 
     for (scalar lambda : prob.lambdas) {
         try {
@@ -181,7 +218,19 @@ std::vector<RCWAResult> runRCWA(const RCWAProblem& prob, std::string& err,
                                    0.5 * (prob.xmin + prob.xmax),
                                    0.5 * (prob.ymin + prob.ymax),
                                    slabCenter[refLayer], lambda);
-            const scalar n_inc = std::sqrt(std::max(eps_inc.real(), scalar(1.0)));
+            // 入射媒質の屈折率。複素平方根の実部を用いることで eps<1 (プラズマ等)
+            // にも対応する。実部を 1 でクランプしていた旧実装は eps<1 で入射角を
+            // 誤り、Bloch 波数がずれていた。
+            const scalar n_inc = std::max(std::sqrt(eps_inc).real(), scalar(1e-6));
+            // 入射半無限媒質が損失を持つと R/T の規格化 (実 kz 前提) が崩れる。
+            if (std::abs(eps_inc.imag()) > 1e-6 * std::abs(eps_inc.real())) {
+                static bool warned = false;
+                if (!warned) {
+                    std::cerr << "*** 警告: 入射側媒質に損失があります"
+                                 " (R/T は無損失入射を前提とした規格化です)\n";
+                    warned = true;
+                }
+            }
             const scalar kx0 = k0 * n_inc * std::sin(thetaRad) * std::cos(phiRad);
             const scalar ky0 = k0 * n_inc * std::sin(thetaRad) * std::sin(phiRad);
             solver.setBlochWavevector(kx0, ky0);

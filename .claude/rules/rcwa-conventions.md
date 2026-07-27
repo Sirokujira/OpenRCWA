@@ -19,6 +19,10 @@ paths:
   対で決まっており、片方だけ変えると斜め入射で R+T≠1 になる。
 - **偏波ベクトル** (RCWADriver): TM `(cosθcosφ, cosθsinφ)`, TE `(−sinφ, cosφ)`。
   法線入射 (θ≈0) では縮退するため x/y 方向を直接使う。
+  任意偏波は複素係数 `(a_TM, a_TE)` で両基底を合成する
+  (`|a_TM|²+|a_TE|²=1` を保てば単位振幅規格化が維持される)。
+- **場の再構成には Bloch 因子が要る**: `f(r) = Σ f_mn·exp(i(kx0+2πm/Lx)x + …)`。
+  `kx0_`/`ky0_` を落とすと |f| は正しいまま Re/Im だけが壊れる (見つけにくい)。
 - **縦成分の導出** (コード内 H 規格化 H_code = i/(ωε₀)·H_phys):
   - `Hz = (i/k0²)(kx·Ey − ky·Ex)` (Faraday 則, μ=1)
   - `Ez = i·[[ε]]⁻¹(kx·Hy − ky·Hx)` ([[ε]] = ContinuousXY 畳み込み行列)
@@ -40,6 +44,13 @@ paths:
 - 場 CSV は 8 桁精度 (`setprecision(8)`)。数値比較の許容誤差は 1e-6 程度に。
 - `SET_HARMONICS_2D` 相当のラムダは RCWASolver.cpp 内に**2 箇所**ほぼ同文で
   存在する。片方だけ直すと saveFieldImage のオーバーロード間で挙動が割れる。
+  場の再構成ブロック (wavelet 合成) も同じく 2 箇所ある。
+- **Eigen の `dot()` は第一引数を共役する**。ハーモニクス合成に使うと位相が
+  反転するので `transpose() *` を用いる。
+- **`harmonics2D` は (nx_ × ny_)**。YZ 断面で y ハーモニクスへ縮約するには
+  `transpose()` が必要 (nx_≠ny_ だと次元不整合で落ちる)。
+- テストで `.orcwa` を組み立てるとき、`ostringstream` の既定精度は 6 桁。
+  厳密一致を見るケースでは `std::setprecision(17)` を明示する。
 
 ## テスト規約
 

@@ -153,9 +153,10 @@ public:
 	
 	scalar reflectance(int inputMode) const;
 
+	// px/py は複素振幅 (円偏波・任意位相の偏波に対応)。scalar からは暗黙変換される。
 	void generateHorizontalPlaneWave(
-		scalar px,
-		scalar py,
+		scalex px,
+		scalex py,
 		int layerType,
 		Eigen::VectorXcs& c);
 

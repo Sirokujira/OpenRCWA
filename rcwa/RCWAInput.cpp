@@ -199,14 +199,22 @@ bool parseRCWAInput(const std::string& path, RCWAProblem& prob, std::string& err
             }
             else if (key == "material_dispersion") {
                 // material_dispersion = m einf ae be ce  [SI 単位: rad/s]
-                // Lorentz 単極モデル: eps(omega) = einf + ae^2/(ce^2-omega^2-i*be*omega)
+                // 同じ m に複数行を書くと極が加算される (多極 Lorentz モデル):
+                //   eps(omega) = einf + Σ_p ae_p^2/(ce_p^2-omega^2-i*be_p*omega)
+                // einf は最後に指定された値を採用する。
                 if (nv >= 5) {
                     int m = toInt(V(0));
                     if (m >= 0 && m < static_cast<int>(prob.materialDispersion.size())) {
-                        prob.materialDispersion[m].einf = toScalar(V(1));
-                        prob.materialDispersion[m].ae   = toScalar(V(2));
-                        prob.materialDispersion[m].be   = toScalar(V(3));
-                        prob.materialDispersion[m].ce   = toScalar(V(4));
+                        auto& d = prob.materialDispersion[m];
+                        d.einf = toScalar(V(1));
+                        RCWAProblem::LorentzPole p;
+                        p.ae = toScalar(V(2));
+                        p.be = toScalar(V(3));
+                        p.ce = toScalar(V(4));
+                        if (p.ae != 0.0) d.poles.push_back(p);
+                    } else {
+                        std::cerr << "*** 警告: material_dispersion の材料番号 "
+                                  << m << " は未定義です (無視します)\n";
                     }
                 }
             }
@@ -237,10 +245,18 @@ bool parseRCWAInput(const std::string& path, RCWAProblem& prob, std::string& err
                 }
             }
             else if (key == "planewave") {
+                // planewave = theta phi pol [psi]
                 if (nv >= 3) {
                     prob.theta = toScalar(V(0));
                     prob.phi   = toScalar(V(1));
                     prob.pol   = toInt(V(2));
+                    if (nv >= 4) prob.psi = toScalar(V(3));
+                    if (prob.pol < 1 || prob.pol > 5) {
+                        std::cerr << "*** 警告: 未対応の偏波指定 pol=" << prob.pol
+                                  << " (1=TM, 2=TE, 3=直線[psi], 4=右円, 5=左円)。"
+                                     "TM として扱います\n";
+                        prob.pol = 1;
+                    }
                 }
             }
             else if (key == "pbc") {
