@@ -19,12 +19,14 @@ static void usage()
     std::cout << "Usage : orcwa_rcwa [-o <out.csv>] [-v] [field options] <datafile.orcwa>\n"
               << "  -o <out.csv>  : output CSV file (default: <input>_rcwa.csv)\n"
               << "  -v            : verbose — also write per-order efficiencies\n"
-              << "  field options (最初の波長の断面場を CSV 出力):\n"
+              << "  断面出力オプション (最初の波長について CSV 出力):\n"
               << "  -field <c>    : Ex|Ey|Ez|Hx|Hy|Hz\n"
+              << "  -device       : 誘電率分布 (実部) も出力する\n"
               << "  -slice <p>    : xy|xz|yz (default: xz)\n"
               << "  -scoord <v>   : slice coordinate [um] (default: 0)\n"
               << "  -sopt <o>     : mod|re|im (default: mod)\n"
-              << "  -fieldout <f> : field CSV file (default: <input>_field.csv)\n";
+              << "  -fieldout <f> : field CSV file (default: <input>_field.csv)\n"
+              << "  -deviceout <f>: device CSV file (default: <input>_device.csv)\n";
 }
 
 // -field 引数 (Ex..Hz) を FieldComponent へ変換。不正なら false。
@@ -47,8 +49,8 @@ int main(int argc, char* argv[])
     bool verbose = false;
 
     RCWAFieldRequest fieldReq;
-    bool wantField = false;
-    std::string fieldOut;
+    bool wantField = false, wantDevice = false;
+    std::string fieldOut, deviceOut;
 
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
@@ -78,6 +80,11 @@ int main(int argc, char* argv[])
             else { std::cerr << "*** 不正な -sopt 引数: " << o << "\n"; return 1; }
         } else if (a == "-fieldout" && i + 1 < argc) {
             fieldOut = argv[++i];
+        } else if (a == "-device") {
+            wantDevice = true;
+        } else if (a == "-deviceout" && i + 1 < argc) {
+            deviceOut = argv[++i];
+            wantDevice = true;
         } else if (a == "--help" || a == "-h") {
             usage();
             return 0;
@@ -117,17 +124,22 @@ int main(int argc, char* argv[])
               << " um)\n";
     std::cout << "=== solving ===\n";
 
+    // 拡張子を除いた入力名 (既定の出力名に使う)
+    auto stem = [&]() {
+        size_t dot = infile.find_last_of('.');
+        return dot == std::string::npos ? infile : infile.substr(0, dot);
+    };
     if (wantField) {
-        if (fieldOut.empty()) {
-            size_t dot = infile.find_last_of('.');
-            fieldOut = (dot == std::string::npos ? infile : infile.substr(0, dot))
-                     + "_field.csv";
-        }
+        if (fieldOut.empty()) fieldOut = stem() + "_field.csv";
         fieldReq.path = fieldOut;
+    }
+    if (wantDevice) {
+        if (deviceOut.empty()) deviceOut = stem() + "_device.csv";
+        fieldReq.devicePath = deviceOut;
     }
 
     std::vector<RCWAResult> results =
-        runRCWA(prob, err, wantField ? &fieldReq : nullptr);
+        runRCWA(prob, err, fieldReq.wantsAnything() ? &fieldReq : nullptr);
     if (results.empty()) {
         std::cerr << "*** 計算エラー: " << err << "\n";
         return 1;
@@ -166,6 +178,8 @@ int main(int argc, char* argv[])
 
     if (wantField)
         std::cout << "=== field  -> " << fieldReq.path << " ===\n";
+    if (wantDevice)
+        std::cout << "=== device -> " << fieldReq.devicePath << " ===\n";
     std::cout << "=== output -> " << outfile << " ===\n";
     std::cout << "=== normal end ===\n";
     return 0;

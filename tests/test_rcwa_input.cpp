@@ -30,6 +30,10 @@
 //   30. 多極 Lorentz 分散の加算
 //   31. eps<1 の入射媒質 (n_inc クランプ撤廃)
 //   32. 内部層なしスタックでの場出力要求 (旧 segfault の回帰テスト)
+//   33. frequency (単数形) キーワード
+//   34. 複素誘電率の直接指定 (material_eps / material_index)
+//   35. 未知キーワードの扱い (FDTD 専用は黙殺, 綴り間違いは警告)
+//   36. 誘電率分布の出力 (saveDeviceImage)
 // ============================================================
 #include <algorithm>
 #include <cassert>
@@ -1684,6 +1688,227 @@ end
 }
 
 // ============================================================
+// Test 33: frequency (単数形) キーワード
+// OpenTHFD 形式の frequency は frequency1/2 と同じ f0 f1 ndiv 形式。
+// 旧実装では未知キーワード扱いで無音で捨てられ、「波長が指定されていません」
+// という無関係なエラーになっていた。
+// ============================================================
+static void test_frequency_singular()
+{
+    static const char* name = "test_frequency_singular";
+    int prev_fails = g_fails;
+
+    std::string path = writeTmp("freq_singular", R"(
+OpenRCWA 4 2
+title = frequency singular
+xmesh = -2.5e-07 10 2.5e-07
+ymesh = -2.5e-07 10 2.5e-07
+zmesh = -3e-07 10 0.0 10 7e-07
+material = 1 2.25 0 1 0
+geometry = 2 1 -2.5e-07 2.5e-07 -2.5e-07 2.5e-07 -3e-07 0
+planewave = 0 0 1
+pbc = 1 1 0
+rcwaorder = 4 0
+frequency = 4.0e+14 5.0e+14 4
+end
+)");
+    RCWAProblem prob;
+    std::string err;
+    bool ok = parseRCWAInput(path, prob, err);
+    std::cout << "  frequency: ok=" << ok
+              << " lambdas=" << prob.lambdas.size() << "\n";
+    CHECK(ok, "singular 'frequency' keyword accepted");
+    CHECK(prob.lambdas.size() == 5, "5 wavelengths from frequency = f0 f1 4");
+    if (ok) {
+        auto res = runRCWA(prob, err);
+        CHECK(!res.empty(), "solves with singular frequency keyword");
+        for (const auto& r : res)
+            CHECK(std::abs(r.R + r.T - 1.0) < 2e-3, "R+T≈1");
+    }
+    if (g_fails == prev_fails) std::cout << "PASS: " << name << "\n";
+    else                       std::cout << "FAIL: " << name << "\n";
+}
+
+// ============================================================
+// Test 34: 複素誘電率の直接指定 (material_eps / material_index)
+// n+ik の実測値をそのまま与えられることを確認する。
+//   material_index = m n k  →  eps = (n + i·k)²
+// 無損失なら Fresnel 解、k>0 なら吸収 (A>0) になる。
+// ============================================================
+static void test_direct_complex_eps()
+{
+    static const char* name = "test_direct_complex_eps";
+    int prev_fails = g_fails;
+
+    auto run = [&](const std::string& matLine, const std::string& tag) {
+        std::ostringstream os;
+        os << "OpenRCWA 4 2\n"
+              "title = direct eps\n"
+              "xmesh = -2.5e-07 10 2.5e-07\n"
+              "ymesh = -2.5e-07 10 2.5e-07\n"
+              "zmesh = -1e-06 10 0.0 10 3e-07 10 7e-07\n"
+              "material = 1 1.0 0 1 0\n"
+           << matLine <<
+              "geometry = 2 1 -2.5e-07 2.5e-07 -2.5e-07 2.5e-07 0 3e-07\n"
+              "planewave = 0 0 1\n"
+              "pbc = 1 1 0\n"
+              "rcwaorder = 4 0\n"
+              "wavelength = 0.6\n"
+              "end\n";
+        return solve(tag, os.str());
+    };
+
+    // (a) material_index = 2 1.5 0 → n=1.5 無損失スラブ。material 行の
+    //     epsr=1.0 を上書きするので、ガラススラブと同じ結果になるはず。
+    {
+        auto res = run("material_index = 2 1.5 0.0\n", "midx_lossless");
+        if (res.empty()) { ++g_fails; }
+        else {
+            std::cout << "  material_index n=1.5: R=" << res[0].R
+                      << " T=" << res[0].T << " A=" << res[0].A << "\n";
+            CHECK(std::abs(res[0].R + res[0].T - 1.0) < 2e-3, "lossless: R+T≈1");
+            CHECK(std::abs(res[0].A) < 2e-3, "lossless: A≈0");
+            CHECK(res[0].R > 1e-3, "index override took effect (R != 0)");
+        }
+    }
+
+    // (b) material_eps = 2 2.25 0 は上と等価 (eps = 1.5²)
+    {
+        auto a = run("material_index = 2 1.5 0.0\n", "midx_eq");
+        auto b = run("material_eps = 2 2.25 0.0\n",  "meps_eq");
+        if (a.empty() || b.empty()) { ++g_fails; }
+        else {
+            std::cout << "  index(1.5)=" << a[0].R
+                      << "  eps(2.25)=" << b[0].R << "\n";
+            CHECK(std::abs(a[0].R - b[0].R) < 1e-12,
+                  "material_index n=1.5 == material_eps 2.25");
+        }
+    }
+
+    // (c) k>0 → 吸収が生じる (exp(-iωt) 規約で正虚部 = 損失)
+    {
+        auto res = run("material_index = 2 1.5 0.1\n", "midx_lossy");
+        if (res.empty()) { ++g_fails; }
+        else {
+            std::cout << "  material_index n=1.5 k=0.1: R=" << res[0].R
+                      << " T=" << res[0].T << " A=" << res[0].A << "\n";
+            CHECK(res[0].A > 0.05, "k>0 absorbs (A > 0.05)");
+            CHECK(res[0].R + res[0].T < 1.0 - 1e-3, "lossy: R+T < 1");
+        }
+    }
+    if (g_fails == prev_fails) std::cout << "PASS: " << name << "\n";
+    else                       std::cout << "FAIL: " << name << "\n";
+}
+
+// ============================================================
+// Test 35: 未知キーワードの扱い
+// FDTD 専用キーワードは正常 (黙って読み飛ばす)。それ以外の綴り間違いは
+// 警告を出しつつ処理を継続する — いずれもパースは成功しなければならない。
+// ============================================================
+static void test_unknown_keyword_handling()
+{
+    static const char* name = "test_unknown_keyword_handling";
+    int prev_fails = g_fails;
+
+    auto parseWith = [&](const std::string& extraLines, const std::string& tag) {
+        std::ostringstream os;
+        os << "OpenRCWA 4 2\n"
+              "title = unknown keyword\n"
+              "xmesh = -2.5e-07 10 2.5e-07\n"
+              "ymesh = -2.5e-07 10 2.5e-07\n"
+              "zmesh = -3e-07 10 0.0 10 7e-07\n"
+              "material = 1 2.25 0 1 0\n"
+           << extraLines <<
+              "planewave = 0 0 1\n"
+              "pbc = 1 1 0\n"
+              "rcwaorder = 2 0\n"
+              "wavelength = 0.6\n"
+              "end\n";
+        std::string path = writeTmp(tag, os.str());
+        RCWAProblem prob;
+        std::string err;
+        bool ok = parseRCWAInput(path, prob, err);
+        return std::make_pair(ok, prob.lambdas.size());
+    };
+
+    // FDTD 専用キーワードが混ざっていてもパースは通る
+    auto fdtd = parseWith(
+        "solver = 3000 100 1e-3\n"
+        "abc = 1 5 5.0 1.1\n"
+        "feed = V 0 0 0 X 1.0 0.0 50.0\n"
+        "plot3dgeom = 1\n"
+        "timestep = 0.0\n", "kw_fdtd");
+    std::cout << "  FDTD-only keywords: ok=" << fdtd.first
+              << " lambdas=" << fdtd.second << "\n";
+    CHECK(fdtd.first, "FDTD-only keywords do not break parsing");
+    CHECK(fdtd.second == 1, "wavelength still picked up");
+
+    // 綴り間違い: 警告は出るがパースは継続する
+    auto typo = parseWith("wavlength = 0.7\nrcwaordr = 3\n", "kw_typo");
+    std::cout << "  typo keywords: ok=" << typo.first
+              << " lambdas=" << typo.second << "\n";
+    CHECK(typo.first, "unknown keywords do not abort parsing");
+    CHECK(typo.second == 1, "typo'd keyword ignored, valid one still applied");
+
+    if (g_fails == prev_fails) std::cout << "PASS: " << name << "\n";
+    else                       std::cout << "FAIL: " << name << "\n";
+}
+
+// ============================================================
+// Test 36: 誘電率分布の出力 (saveDeviceImage)
+// 旧実装は行列を計算するだけで保存処理がコメントアウトされていた。
+// 空気 (eps=1) とガラス (eps=2.25) の格子で両方の値が現れることを確認する。
+// ============================================================
+static void test_device_image_output()
+{
+    static const char* name = "test_device_image_output";
+    int prev_fails = g_fails;
+
+    std::string path = writeTmp("devimg", R"(
+OpenRCWA 4 2
+title = device image
+xmesh = -2.5e-07 10 2.5e-07
+ymesh = -2.5e-07 10 2.5e-07
+zmesh = -7e-07 10 -3e-07 10 0.0 10 7e-07
+material = 1 2.25 0 1 0
+geometry = 2 1 -2.5e-07 0.0 -2.5e-07 2.5e-07 -3e-07 0
+planewave = 0 0 1
+pbc = 1 1 0
+rcwaorder = 4 0
+wavelength = 0.6
+end
+)");
+    RCWAProblem prob;
+    std::string err;
+    if (!parseRCWAInput(path, prob, err)) {
+        std::cerr << "  parse error: " << err << "\n"; ++g_fails; return;
+    }
+
+    RCWAFieldRequest req;
+    req.slice      = sliceXZ;
+    req.coord      = 0.0;
+    req.devicePath = "/tmp/rcwa_t36_device.csv";
+    std::remove(req.devicePath.c_str());
+
+    auto res = runRCWA(prob, err, &req);
+    if (res.empty()) { std::cerr << "  runRCWA error: " << err << "\n"; ++g_fails; return; }
+
+    auto vals = csvReadAll(req.devicePath);
+    std::cout << "  device CSV cells: " << vals.size() << "\n";
+    CHECK(!vals.empty(), "device CSV written (was a commented-out stub)");
+    if (!vals.empty()) {
+        double lo = *std::min_element(vals.begin(), vals.end());
+        double hi = *std::max_element(vals.begin(), vals.end());
+        std::cout << "  eps range: [" << lo << ", " << hi << "]\n";
+        // 格子層は空気 (1.0) とガラス (2.25) の両方を含む
+        CHECK(std::abs(lo - 1.0) < 1e-6,  "device: air region eps=1");
+        CHECK(std::abs(hi - 2.25) < 1e-6, "device: glass region eps=2.25");
+    }
+    if (g_fails == prev_fails) std::cout << "PASS: " << name << "\n";
+    else                       std::cout << "FAIL: " << name << "\n";
+}
+
+// ============================================================
 // main
 // ============================================================
 int main()
@@ -1722,6 +1947,10 @@ int main()
     test_multipole_dispersion();
     test_low_index_incidence();
     test_field_request_without_interior_layer();
+    test_frequency_singular();
+    test_direct_complex_eps();
+    test_unknown_keyword_handling();
+    test_device_image_output();
 
     std::cout << "======================================\n";
     if (g_fails == 0)

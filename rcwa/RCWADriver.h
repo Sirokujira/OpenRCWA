@@ -26,15 +26,18 @@ struct RCWAResult
     std::vector<scalar> TRN_orders;
 };
 
-// 場イメージ出力の指定 (任意)。指定時は最初の波長についてのみ
-// saveFieldImage で断面 CSV を書き出す。
+// 断面出力の指定 (任意)。指定時は最初の波長についてのみ CSV を書き出す。
+// path / devicePath はそれぞれ独立に指定でき、空なら出力しない。
 struct RCWAFieldRequest
 {
     FieldComponent component = Ez;         // 出力する場成分
-    SliceType      slice     = sliceXZ;    // スライス面
+    SliceType      slice     = sliceXZ;    // スライス面 (場・構造で共通)
     scalar         coord     = 0.0;        // スライス位置 [μm]
     SaveOption     opt       = modulation; // |f| / Re / Im
-    std::string    path;                   // 出力 CSV パス
+    std::string    path;                   // 場イメージの出力 CSV パス
+    std::string    devicePath;             // 誘電率分布 (実部) の出力 CSV パス
+
+    bool wantsAnything() const { return !path.empty() || !devicePath.empty(); }
 };
 
 // prob を解き、波長ごとの R/T を返す。失敗時は空配列を返し err を設定する。

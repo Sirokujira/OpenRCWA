@@ -34,7 +34,8 @@ cmake --build build --target orcwa_rcwa test_rcwa_input -j$(nproc)
 ## 実行
 
 ```bash
-./bin/orcwa_rcwa [-o out.csv] [-v] [-field Ez -slice xz -scoord 0 -sopt mod] input.orcwa
+./bin/orcwa_rcwa [-o out.csv] [-v] \
+    [-field Ez -slice xz -scoord 0 -sopt mod] [-device] input.orcwa
 ```
 
 ## ディレクトリ構成
@@ -59,6 +60,7 @@ cmake --build build --target orcwa_rcwa test_rcwa_input -j$(nproc)
 - **時間規約は exp(−iωt)**: 損失媒質は誘電率の**正**の虚部。負の虚部は利得になる。
 - **内部単位は μm**: `.orcwa` はメートル指定で、パース時に μm へ変換される。
 - **材料インデックス**: 0=空気, 1=PEC, 2以降がユーザ定義 (`material` 行の順)。
+  複素誘電率は `material_eps = m epsr epsi` / `material_index = m n k` で直接指定できる。
 - **RCWA は周期境界のみ**: `pbc=0` は警告の上で無視される。
 - **偏波指定**: `planewave = θ φ pol [psi]` — pol は 1=TM(p), 2=TE(s),
   3=psi[deg] の直線偏波 (0=TM, 90=TE), 4=右円偏波, 5=左円偏波。

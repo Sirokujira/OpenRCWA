@@ -1359,6 +1359,7 @@ void RCWASolver::saveDeviceImage(const std::string& filename,
 
 	int nRes1 = 2000;
 	int nRes2 = static_cast<int>( nRes1 * L2 / L1);
+	if (nRes2 < 1) nRes2 = 1;   // L2=0 (ゼロ除算) を避ける
 
 	scalar step1 = L1 / nRes1;
 	scalar step2 = L2 / nRes2;
@@ -1400,6 +1401,12 @@ void RCWASolver::saveDeviceImage(const std::string& filename,
 					break;
 				}
 				z0 = z1;
+			}
+			if (layer1 < 0)
+			{
+				std::cerr << "Device image requires at least one finite-thickness "
+							 "interior layer!\n";
+				return;
 			}
 			int layerType = layerStack[layer1];
 			scalar tx = 0.;
@@ -1444,6 +1451,12 @@ void RCWASolver::saveDeviceImage(const std::string& filename,
 			}
 			z0 = z1;
 		}
+		if (layer1 < 0)
+		{
+			std::cerr << "Device image requires at least one finite-thickness "
+						 "interior layer!\n";
+			return;
+		}
 		int layerType = layerStack[layer1];
 		scalar tx = 0.;
 		if (translation != nullptr)
@@ -1464,9 +1477,9 @@ void RCWASolver::saveDeviceImage(const std::string& filename,
 	}
 
 
-	// MatrixVisualizer vis(device);
-	// vis.setXTimes(1);
-	// vis.save(filename, realpart);	
+	// 誘電率分布 (実部) を CSV に書き出す。損失材料の虚部を見たい場合は
+	// imagpart を渡すこと。
+	writeFieldCSV(filename, device, realpart);
 }
 
 

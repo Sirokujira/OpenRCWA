@@ -131,8 +131,8 @@ std::vector<RCWAResult> runRCWA(const RCWAProblem& prob, std::string& err,
 
     // 場イメージは半無限層に挟まれた有限厚の内部層に対してのみ定義される。
     // 層数 = zedges.size()-1 なので、内部層を持つには 3 層以上が必要。
-    if (fieldReq && !fieldReq->path.empty() && zedges.size() - 1 < 3) {
-        err = "場イメージ出力には内部層が必要です "
+    if (fieldReq && fieldReq->wantsAnything() && zedges.size() - 1 < 3) {
+        err = "断面出力には内部層が必要です "
               "(zmesh / geometry を 3 層以上に分割してください)";
         return results;
     }
@@ -250,16 +250,23 @@ std::vector<RCWAResult> runRCWA(const RCWAProblem& prob, std::string& err,
             VectorXs REF, TRN;
             solver.scatterPlaneWave(cInc, refLayer, trnLayer, k0, REF, TRN);
 
-            // 場イメージ出力 (最初の波長のみ)
-            if (fieldReq && !fieldSaved && !fieldReq->path.empty()) {
-                std::vector<std::pair<int, scalex>> inputCoeffs;
-                for (int i = 0; i < cInc.size(); ++i)
-                    if (std::abs(cInc(i)) > 1e-14)
-                        inputCoeffs.emplace_back(i, cInc(i));
-                solver.saveFieldImage(fieldReq->path,
-                                      fieldReq->slice, fieldReq->coord,
-                                      fieldReq->component, fieldReq->opt,
-                                      inputCoeffs, layerStack, thickness);
+            // 断面出力 (最初の波長のみ)
+            if (fieldReq && !fieldSaved && fieldReq->wantsAnything()) {
+                if (!fieldReq->path.empty()) {
+                    std::vector<std::pair<int, scalex>> inputCoeffs;
+                    for (int i = 0; i < cInc.size(); ++i)
+                        if (std::abs(cInc(i)) > 1e-14)
+                            inputCoeffs.emplace_back(i, cInc(i));
+                    solver.saveFieldImage(fieldReq->path,
+                                          fieldReq->slice, fieldReq->coord,
+                                          fieldReq->component, fieldReq->opt,
+                                          inputCoeffs, layerStack, thickness);
+                }
+                if (!fieldReq->devicePath.empty()) {
+                    solver.saveDeviceImage(fieldReq->devicePath,
+                                           fieldReq->slice, fieldReq->coord,
+                                           layerStack, thickness);
+                }
                 fieldSaved = true;
             }
 

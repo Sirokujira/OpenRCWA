@@ -52,6 +52,11 @@ paths:
 - テストで `.orcwa` を組み立てるとき、`ostringstream` の既定精度は 6 桁。
   厳密一致を見るケースでは `std::setprecision(17)` を明示する。
 
+- `.orcwa` は FDTD と共有する形式。未知キーワードは警告するが、`plot*` /
+  `far1d*` / `far2d*` / `near*` と時間領域固有の設定は FDTD 専用として黙殺する
+  (`isFDTDOnlyKeyword`)。FDTD 側にキーワードが増えても誤警告しないよう
+  接頭辞判定にしてある。
+
 ## テスト規約
 
 - 物理変更には必ず解析解 (Fresnel / Brewster / エネルギー保存) との比較テストを

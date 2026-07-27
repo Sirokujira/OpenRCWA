@@ -5,6 +5,7 @@
 #include <sstream>
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <set>
 
 // ============================================================
@@ -106,6 +107,28 @@ std::vector<std::string> tokenize(const std::string& line)
 scalar toScalar(const std::string& s) { return std::stod(s); }
 int    toInt(const std::string& s)    { return std::stoi(s); }
 
+// .orcwa は FDTD ソルバと共有する形式であり、時間領域固有のキーワードが
+// 含まれていても正常。RCWA では意味を持たないので黙って読み飛ばす。
+// (ここに無いキーワードは綴り間違いの可能性があるため警告する)
+bool isFDTDOnlyKeyword(const std::string& k)
+{
+    // 出力・作図系はすべて接頭辞で判定する (plot*, far1d*, far2d*, near*)。
+    // 個別に列挙すると FDTD 側の追加に追従できず誤警告の原因になる。
+    static const char* kPrefixes[] = {
+        "plot", "far1d", "far2d", "near1d", "near2d", "near3d",
+    };
+    for (const char* p : kPrefixes)
+        if (k.compare(0, std::strlen(p), p) == 0) return true;
+
+    // 時間領域固有の設定 (励振・境界・時間刻み・回路素子など)。
+    static const std::set<std::string> kFDTDOnly = {
+        "abc", "feed", "rfeed", "point", "load", "inductor", "source",
+        "solver", "timestep", "pulsewidth", "freqdiv", "matchingloss",
+        "name",
+    };
+    return kFDTDOnly.count(k) != 0;
+}
+
 } // namespace
 
 bool parseRCWAInput(const std::string& path, RCWAProblem& prob, std::string& err)
@@ -197,6 +220,25 @@ bool parseRCWAInput(const std::string& path, RCWAProblem& prob, std::string& err
                     prob.materialDispersion.emplace_back();  // 非分散として初期化
                 }
             }
+            else if (key == "material_eps" || key == "material_index") {
+                // RCWA 拡張: 材料 m の複素誘電率を直接指定する。
+                //   material_eps   = m epsr [epsi]   誘電率そのもの
+                //   material_index = m n    [k]      屈折率 (eps = (n + i·k)^2)
+                // 時間規約 exp(-iωt) では損失は正の虚部 (k>0 が吸収)。
+                if (nv >= 2) {
+                    int m = toInt(V(0));
+                    if (m >= 0 && m < static_cast<int>(prob.materialEps.size())) {
+                        scalar a = toScalar(V(1));
+                        scalar b = (nv >= 3) ? toScalar(V(2)) : 0.0;
+                        prob.materialEps[m] = (key == "material_index")
+                            ? scalex(a, b) * scalex(a, b)
+                            : scalex(a, b);
+                    } else {
+                        std::cerr << "*** 警告: " << key << " の材料番号 " << m
+                                  << " は未定義です (無視します)\n";
+                    }
+                }
+            }
             else if (key == "material_dispersion") {
                 // material_dispersion = m einf ae be ce  [SI 単位: rad/s]
                 // 同じ m に複数行を書くと極が加算される (多極 Lorentz モデル):
@@ -275,10 +317,13 @@ bool parseRCWAInput(const std::string& path, RCWAProblem& prob, std::string& err
                 if (nv >= 1) prob.nHx = toInt(V(0));
                 if (nv >= 2) prob.nHy = toInt(V(1));
             }
-            else if (key == "frequency1" || key == "frequency2") {
+            else if (key == "frequency1" || key == "frequency2" ||
+                     key == "frequency") {
                 // frequency1/2 = f0 f1 ndiv  [Hz] -> 波長 [μm] に変換
-                // 両方指定された場合は波長を結合し昇順ソート・重複除去する
-                bool isFirst = (key == "frequency1");
+                // 両方指定された場合は波長を結合し昇順ソート・重複除去する。
+                // 単数形 "frequency" は OpenTHFD 形式で frequency1/2 を同時に
+                // 設定するキーワード。RCWA では frequency1 と同義に扱う。
+                bool isFirst = (key != "frequency2");
                 bool& already = isFirst ? haveFreq1 : haveFreq2;
                 if (!already && nv >= 3) {
                     scalar f0   = toScalar(V(0));
@@ -322,7 +367,16 @@ bool parseRCWAInput(const std::string& path, RCWAProblem& prob, std::string& err
                     prob.backgroundEps = scalex(epsr, epsi);
                 }
             }
-            // その他のキーワード (solver, point, plot* 等) は RCWA では無視
+            else if (isFDTDOnlyKeyword(key)) {
+                // 時間領域 (FDTD) 専用のキーワード。.orcwa は両ソルバで共有する
+                // 形式なので、これらが書かれていても正常。黙って読み飛ばす。
+            }
+            else {
+                // 上記のいずれでもない = 綴り間違いか RCWA 未対応の機能。
+                // 黙って捨てると原因不明のエラーになるため必ず知らせる。
+                std::cerr << "*** 警告: 未知のキーワード \"" << key
+                          << "\" を無視します\n";
+            }
         }
         catch (const std::exception& e) {
             err = std::string("解析エラー (") + key + "): " + e.what();
