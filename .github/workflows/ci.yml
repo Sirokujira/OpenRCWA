@@ -4,12 +4,24 @@
 # 回折効率の計算とエネルギー保存 (R+T=1) を検証する。
 name: CI
 
+# 実行回数の抑制 (非公開リポジトリの Actions は課金対象。macOS は 10 倍、
+# Windows は 2 倍の分数を消費する):
+#   - 作業ブランチへの push では起動しない。PR を開けば pull_request が
+#     カバーするため、従来の「push と pull_request が二重に走る」無駄も消える。
+#   - 手動確認が必要なときは workflow_dispatch で起動できる。
 on:
   push:
-    branches: [ main, "claude/**" ]
+    branches: [ main ]
     tags: [ "v*" ]
   pull_request:
     branches: [ main ]
+  workflow_dispatch:
+
+# 同一 ref への連続 push では古い実行を打ち切る (追い越された実行に
+# 分数を使わない)。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build-cpu:
@@ -185,19 +197,44 @@ jobs:
 
       # hdf5 の既定機能 szip は libaec を gitlab.dkrz.de から取得するが
       # 429 で落ちることがあるため、必要な core+zlib のみに絞る
+      # lapack (openblas 実装) は RCWA の固有値計算を LAPACKE 経路にするために導入する。
+      # Eigen フォールバックは ±m 次数の縮退固有値で基底が不良条件になりうるため、
+      # 残差検算つきの LAPACKE 経路の方が堅牢 (macOS でも同じ理由で LAPACKE を使う)。
+      # vcpkg のビルド成果物をキャッシュする (初回以降は約 4 分の
+      # インストールが数十秒になる。Windows は分数 2 倍のため効果が大きい)。
+      - name: Cache vcpkg binaries
+        uses: actions/cache@v4
+        with:
+          path: ~/AppData/Local/vcpkg/archives
+          key: vcpkg-windows-${{ hashFiles('.github/workflows/ci.yml') }}
+          restore-keys: vcpkg-windows-
+
       - name: Install dependencies (vcpkg)
-        run: vcpkg install "hdf5[core,zlib]:x64-windows-static-md" eigen3:x64-windows-static-md --recurse
+        run: vcpkg install "hdf5[core,zlib]:x64-windows-static-md" eigen3:x64-windows-static-md lapack:x64-windows-static-md --recurse
 
       - name: Set up MSVC environment
         uses: ilammy/msvc-dev-cmd@v1
 
       - name: Configure (CPU only)
-        run: >
-          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
-          -DWITH_CUDA=OFF -DWITH_MPI=OFF
-          -DWITH_RCWA=OFF
-          "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake"
-          -DVCPKG_TARGET_TRIPLET=x64-windows-static-md
+        run: |
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release `
+            -DWITH_CUDA=OFF -DWITH_MPI=OFF `
+            -DWITH_RCWA=OFF `
+            "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=x64-windows-static-md 2>&1 | Tee-Object -FilePath configure.log
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      # 固有値ソルバの経路をログに残す (LAPACKE 経路か Eigen フォールバックか)。
+      # vcpkg の lapack が LAPACKE を提供しない場合でも Eigen 経路で動作するため、
+      # ここでは失敗させずに採用された経路を明示するだけにする。
+      - name: Report eigen solver backend
+        run: |
+          $line = Select-String -Path configure.log -Pattern "LAPACKE" | Select-Object -First 1
+          if ($line -and $line.Line -match "見つかりました") {
+            Write-Host "eigen solver backend: LAPACKE ($($line.Line))"
+          } else {
+            Write-Host "eigen solver backend: Eigen fallback (LAPACKE not found)"
+          }
 
       - name: Build orcwa / orcwa_post
         run: cmake --build build
