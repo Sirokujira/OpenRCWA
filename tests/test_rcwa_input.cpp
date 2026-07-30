@@ -1252,6 +1252,48 @@ end
     double R = res[0].R, T = res[0].T;
     std::cout << "  sphere R=" << R << " T=" << T << " R+T=" << R + T << "\n";
     CHECK(std::abs(R + T - 1.0) < 2e-3, "sphere: energy conservation R+T≈1");
+
+    // --- 形状が実際に区別されているか ---
+    // エネルギー保存だけでは「球が円柱として扱われている」バグを見逃す
+    // (どちらの誘電率分布でも R+T=1 は成立してしまう)。
+    // 同一バウンディングボックスで形状だけを変え、結果が異なることを確かめる。
+    // 高コントラスト (eps=12) にすると差が大きく出て判別しやすい。
+    auto runShape = [&](int shape, const std::string& tag) -> double {
+        std::ostringstream os;
+        os << "OpenRCWA 4 2\n"
+              "title = shape discrimination\n"
+              "xmesh = -2.5e-07 10 2.5e-07\n"
+              "ymesh = -2.5e-07 10 2.5e-07\n"
+              "zmesh = -7e-07 10 7e-07\n"
+              "material = 1 12.0 0 1 0\n"
+              "geometry = 2 " << shape
+           << " -2e-07 2e-07 -2e-07 2e-07 -2e-07 2e-07\n"
+              "planewave = 0 0 1\n"
+              "pbc = 1 1 0\n"
+              "rcwaorder = 3 3\n"
+              "wavelength = 0.6\n"
+              "end\n";
+        auto r = solve(tag, os.str());
+        if (r.empty()) { ++g_fails; return -1.0; }
+        CHECK(std::abs(r[0].R + r[0].T - 1.0) < 2e-3,
+              std::string("energy conservation for shape ") + std::to_string(shape));
+        return r[0].R;
+    };
+
+    const double rBox    = runShape(RCWA_SHAPE_BOX,    "shp_box");
+    const double rSphere = runShape(RCWA_SHAPE_SPHERE, "shp_sphere");
+    const double rCylZ   = runShape(RCWA_SHAPE_CYL_Z,  "shp_cylz");
+    const double rCylX   = runShape(RCWA_SHAPE_CYL_X,  "shp_cylx");
+    std::cout << "  same bbox: BOX=" << rBox << " SPHERE=" << rSphere
+              << " CYL_Z=" << rCylZ << " CYL_X=" << rCylX << "\n";
+
+    // 球と z 軸円柱は XY 断面が同一なので、z 依存断面 (containsXYZ) と
+    // 面内の階段近似の両方が効いていなければ同じ答えになる。
+    CHECK(std::abs(rSphere - rCylZ) > 1e-2, "SPHERE distinguished from CYL_Z");
+    CHECK(std::abs(rSphere - rBox)  > 1e-2, "SPHERE distinguished from BOX");
+    CHECK(std::abs(rCylZ  - rBox)   > 1e-2, "CYL_Z distinguished from BOX");
+    CHECK(std::abs(rCylX  - rBox)   > 1e-2, "CYL_X distinguished from BOX");
+
     if (g_fails == prev_fails) std::cout << "PASS: " << name << "\n";
     else                       std::cout << "FAIL: " << name << "\n";
 }

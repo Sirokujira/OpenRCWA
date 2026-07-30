@@ -15,7 +15,40 @@ namespace {
 constexpr scalar C0_UM  = 2.99792458e14;   // c [μm/s]
 constexpr scalar EPS0   = 8.854187817e-12; // ε₀ [F/m]
 
+// 曲面形状を階段近似するための面内分割数。
+// 直方体はエッジだけで厳密に表現できるので分割しない。
+constexpr int N_CURVED_CELLS = 8;
+
+// 形状 b の断面が x / y 方向に曲率を持つか (= その軸を細分する必要があるか)。
+//   SPHERE / CYL_Z : XY 断面が円 → x, y とも細分
+//   CYL_Y          : XZ 断面が円 → x を細分 (y は軸方向で平坦)
+//   CYL_X          : YZ 断面が円 → y を細分 (x は軸方向で平坦)
+bool curvedInX(const RCWABox& b)
+{
+    return b.shape == RCWA_SHAPE_SPHERE || b.shape == RCWA_SHAPE_CYL_Z ||
+           b.shape == RCWA_SHAPE_CYL_Y;
+}
+
+bool curvedInY(const RCWABox& b)
+{
+    return b.shape == RCWA_SHAPE_SPHERE || b.shape == RCWA_SHAPE_CYL_Z ||
+           b.shape == RCWA_SHAPE_CYL_X;
+}
+
+// 区間 [lo, hi] を n 等分する内部エッジを、[cmin, cmax] に収まる範囲で追加する。
+void insertSubdivisions(std::set<scalar>& out, scalar lo, scalar hi,
+                        scalar cmin, scalar cmax, int n)
+{
+    for (int i = 1; i < n; ++i) {
+        scalar v = lo + (hi - lo) * i / static_cast<scalar>(n);
+        if (v > cmin && v < cmax) out.insert(v);
+    }
+}
+
 // 全スラブ共通の x エッジを収集する。
+// 曲面形状はバウンディングボックスのエッジだけでは断面を表現できないため
+// 内部も細分する。細分しないとセル中心が数点しか取れず、球・円柱・直方体が
+// まったく同じ誘電率分布になってしまう (形状指定が無視されるのと同じ)。
 std::vector<scalar> buildCommonXGrid(const RCWAProblem& prob)
 {
     std::set<scalar> xs;
@@ -26,6 +59,8 @@ std::vector<scalar> buildCommonXGrid(const RCWAProblem& prob)
         scalar x1 = std::min(b.x1, prob.xmax);
         if (x0 > prob.xmin && x0 < prob.xmax) xs.insert(x0);
         if (x1 > prob.xmin && x1 < prob.xmax) xs.insert(x1);
+        if (curvedInX(b) && x0 < x1)
+            insertSubdivisions(xs, x0, x1, prob.xmin, prob.xmax, N_CURVED_CELLS);
     }
     return std::vector<scalar>(xs.begin(), xs.end());
 }
@@ -41,6 +76,8 @@ std::vector<scalar> buildCommonYGrid(const RCWAProblem& prob)
         scalar y1 = std::min(b.y1, prob.ymax);
         if (y0 > prob.ymin && y0 < prob.ymax) ys.insert(y0);
         if (y1 > prob.ymin && y1 < prob.ymax) ys.insert(y1);
+        if (curvedInY(b) && y0 < y1)
+            insertSubdivisions(ys, y0, y1, prob.ymin, prob.ymax, N_CURVED_CELLS);
     }
     return std::vector<scalar>(ys.begin(), ys.end());
 }
