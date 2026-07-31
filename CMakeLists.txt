@@ -109,6 +109,18 @@ else()
         add_definitions(-DUSE_LAPACKE)
         list(APPEND MKL_LIBRARIES ${LAPACKE_LIBRARY})
         set(MKL_INCLUDE_DIR ${LAPACKE_INCLUDE_DIR})
+        # 静的な LAPACKE (vcpkg の lapack-reference 等) は lapack / blas 本体を
+        # 内包しないため、見つかれば後ろに続けてリンクする (リンク順が重要)。
+        # 共有ライブラリの環境 (Linux の liblapacke.so 等) では依存が埋まって
+        # いるので、見つからなくても問題ない。
+        find_library(LAPACK_CORE_LIBRARY NAMES lapack)
+        find_library(BLAS_CORE_LIBRARY NAMES blas openblas cblas)
+        if(LAPACK_CORE_LIBRARY)
+            list(APPEND MKL_LIBRARIES ${LAPACK_CORE_LIBRARY})
+        endif()
+        if(BLAS_CORE_LIBRARY)
+            list(APPEND MKL_LIBRARIES ${BLAS_CORE_LIBRARY})
+        endif()
     else()
         message(STATUS "LAPACKE が見つかりません。Eigen の固有値ソルバを使用します。")
     endif()

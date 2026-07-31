@@ -228,9 +228,13 @@ jobs:
 
       # hdf5 の既定機能 szip は libaec を gitlab.dkrz.de から取得するが
       # 429 で落ちることがあるため、必要な core+zlib のみに絞る
-      # lapack (openblas 実装) は RCWA の固有値計算を LAPACKE 経路にするために導入する。
-      # Eigen フォールバックは ±m 次数の縮退固有値で基底が不良条件になりうるため、
-      # 残差検算つきの LAPACKE 経路の方が堅牢 (macOS でも同じ理由で LAPACKE を使う)。
+      # Windows の LAPACKE 導入は 2 回試行してどちらも不成立だったため、
+      # Eigen フォールバック (縮退対策の対角摂動あり) を正式経路とする:
+      #   1. lapack ポート (clapack+openblas) は lapacke.h を提供しない
+      #      (CI 実測: "eigen solver backend: Eigen fallback")
+      #   2. lapack-reference ポートは VS 同梱 flang が LAPACK 3.12.1 の
+      #      sgedmd.f90 をコンパイルできず vcpkg ビルド自体が失敗する
+      #      (flang のバグ。vcpkg/LLVM 側の修正後に再挑戦する)
       # vcpkg のビルド成果物をキャッシュする (初回以降は約 4 分の
       # インストールが数十秒になる。Windows は分数 2 倍のため効果が大きい)。
       - name: Cache vcpkg binaries
@@ -241,7 +245,7 @@ jobs:
           restore-keys: vcpkg-windows-
 
       - name: Install dependencies (vcpkg)
-        run: vcpkg install "hdf5[core,zlib]:x64-windows-static-md" eigen3:x64-windows-static-md lapack:x64-windows-static-md --recurse
+        run: vcpkg install "hdf5[core,zlib]:x64-windows-static-md" eigen3:x64-windows-static-md --recurse
 
       - name: Set up MSVC environment
         uses: ilammy/msvc-dev-cmd@v1
