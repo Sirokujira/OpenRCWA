@@ -957,8 +957,10 @@ void RCWASolver::saveFieldImage(
 						= exp(scalex(0, (2. * Pi * m / Lh + kh0) * h));
 					}
 
-					// dot() は第一引数を共役するため transpose() で内積を取る
-					field(i, j) = waveletH.transpose() * oneDirHarmonics;
+					// dot() は第一引数を共役するため transpose() で内積を取る。
+					// 結果は 1x1 の Eigen 式なので .value() でスカラーに落とす
+					// (libc++ は Product -> std::complex の暗黙変換を通さない)。
+					field(i, j) = (waveletH.transpose() * oneDirHarmonics).value();
 				};
 
 				if (sliceType == sliceXZ)
@@ -1261,8 +1263,10 @@ void RCWASolver::saveFieldImage(const std::string& filename,
 						= exp(scalex(0, (2. * Pi * m / Lh + kh0) * h));
 					}
 
-					// dot() は第一引数を共役するため transpose() で内積を取る
-					field(i, j) = waveletH.transpose() * oneDirHarmonics;
+					// dot() は第一引数を共役するため transpose() で内積を取る。
+					// 結果は 1x1 の Eigen 式なので .value() でスカラーに落とす
+					// (libc++ は Product -> std::complex の暗黙変換を通さない)。
+					field(i, j) = (waveletH.transpose() * oneDirHarmonics).value();
 				};
 
 				if (sliceType == sliceXZ)
