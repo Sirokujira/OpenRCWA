@@ -50,9 +50,7 @@ public:
         Eigen::MatrixXcs& P,
         Eigen::MatrixXcs& Q) override;
         
-    void sampleOnGPU(scalar z,
-        acacia::gpu::complex_t *P,
-        acacia::gpu::complex_t *Q) override {}
+    // GPU path not implemented for GDSIISampler; inherits throwing default.
 private:
     void assignSimulationRegion() override;
 };

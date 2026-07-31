@@ -11,6 +11,8 @@ private:
 	Eigen::VectorXs coordX_;
 	Eigen::VectorXs coordY_;
 	Eigen::MatrixXcs eps_;
+	Eigen::MatrixXcs mu_;      // 透磁率 (既定は全セル 1)
+	bool isMagnetic_ = false;  // mu_ が恒等でない場合のみ true
 
 	int nCx_;
 	int nCy_;
@@ -21,13 +23,35 @@ private:
 	Eigen::MatrixXcs eigvecH_;
 	Eigen::VectorXcs gamma_;
 
+	scalar lambda_ = 0;  // 直近の solve() で用いた波長 (k0 の復元用)
+
 public:
 	Layer(const Eigen::VectorXs& coordX,
 		const Eigen::VectorXs& coordY,
 		const Eigen::MatrixXcs& eps);
-	
+
+	// 磁性層 (μr≠1) 用。mu は eps と同じ形状でなければならない。
+	Layer(const Eigen::VectorXs& coordX,
+		const Eigen::VectorXs& coordY,
+		const Eigen::MatrixXcs& eps,
+		const Eigen::MatrixXcs& mu);
+
 	const Eigen::MatrixXcs& eps() const { return eps_; }
 	scalex eps(scalar x, scalar y) const;
+
+	const Eigen::MatrixXcs& mu() const { return mu_; }
+	scalex mu(scalar x, scalar y) const;
+
+	// μ が全セル 1 なら false。false のときは P/Q 行列の高速経路を使う。
+	bool isMagnetic() const { return isMagnetic_; }
+
+	// solve() 時に設定された波長と対応する真空波数 k0 = 2π/λ。
+	scalar lambda() const { return lambda_; }
+	scalar k0() const { return 2 * Pi / lambda_; }
+
+	// 誘電率の畳み込み行列 [[ε]] (ContinuousXY 規則, サイズ nx*ny × nx*ny)。
+	// 縦方向成分 Ez = i·[[ε]]⁻¹(kx·Hy − ky·Hx) の評価に用いる。
+	Eigen::MatrixXcs epsConvolution(int nx, int ny) const;
 	
 	scalar Lx() const { return coordX_[nCx_-1] - coordX_[0]; }
 	scalar Ly() const { return coordY_[nCy_-1] - coordY_[0]; }
@@ -101,10 +125,11 @@ public:
 		const Eigen::MatrixXcs& eigvecH,
 		const Eigen::VectorXcs& gamma);
 	
+	// px/py は複素振幅 (円偏波・任意位相の偏波に対応)。scalar からは暗黙変換される。
 	void generatePlaneWave(
 		const Eigen::VectorXcs& delta,
-		scalar px,
-		scalar py,
+		scalex px,
+		scalex py,
 		Eigen::VectorXcs& c);
 	
 	void getHarmonics(

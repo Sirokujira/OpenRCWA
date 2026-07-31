@@ -18,6 +18,24 @@ subprocess として起動されます。
 - **FDTD モード** — それ以外の入力は OpenFDTD 由来の FDTD 経路で
   動作します (従来通り)。
 
+`orcwa` とは別に、RCWA 専用のドライバ **`orcwa_rcwa`** があります。
+こちらは `.orcwa` 形式 (テキスト、`.ofd` と共通の書式) を直接受け取り、
+`orcwa` の RCWA モードでは扱えない以下に対応します:
+
+- 斜め入射・円錐回折 (`planewave = θ φ pol [psi]`)、任意の直線/円偏波
+- 2D 周期格子、円柱・球などの形状レイヤ、GDSII 由来パターン
+- 分散性・磁性・複素誘電率の材料指定 (多極 Lorentz + 導電率)
+- 回折次数ごとの効率出力と、断面場 (Ex..Hz) の CSV / 画像出力
+
+```sh
+./bin/orcwa_rcwa [-o out.csv] [-v] \
+    [-field Ez -slice xz -scoord 0 -sopt mod] [-device] input.orcwa
+```
+
+パーサは `rcwa/RCWAInput`、ドライバは `rcwa/RCWADriver`。単体テストは
+`bin/tests/test_rcwa_input` (Fresnel / Brewster / エネルギー保存の
+解析解比較を含む) で、CI の Linux ジョブが常時実行します。
+
 なお `core/` の積分器 (`RCWAIntegrator`, `RedhefferIntegrator`,
 `DifferentialIntegrator`) は導波モード基底の別系統で、`tests/` の
 テストバイナリからのみ利用できます。

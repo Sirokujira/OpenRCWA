@@ -70,6 +70,37 @@ jobs:
           awk -F, 'NR>1 { if ((($3+$4)-1)^2 > 9e-6 || (($5+$6)-1)^2 > 9e-6) \
             { print "energy not conserved:", $0; exit 1 } }' rcwa_efficiency.csv
 
+      # 以下は .orcwa 経路 (orcwa_rcwa ドライバ)。上の grating スモークは
+      # .ofd 経路 (orcwa 内蔵ブリッジ) なので別物。
+      - name: RCWA unit tests (parser + driver)
+        run: |
+          mkdir -p /tmp/rcwa-unit && cd /tmp/rcwa-unit
+          # 終了コード = 失敗数。0 (全 PASS) でなければジョブが落ちる。
+          "$GITHUB_WORKSPACE/bin/tests/test_rcwa_input" | tee rcwa_unit.log
+
+      - name: Smoke test — orcwa_rcwa (.orcwa Fresnel)
+        run: |
+          mkdir -p /tmp/smoke-orcwa && cd /tmp/smoke-orcwa
+          # 空気/ガラス界面の Fresnel 反射 (解析解 R=0.04, R+T=1) を検証
+          "$GITHUB_WORKSPACE/bin/orcwa_rcwa" -o rcwa.csv \
+            "$GITHUB_WORKSPACE/ci/smoke_rcwa.orcwa" | tee rcwa.log
+          grep -q "normal end" rcwa.log
+          python3 - rcwa.csv <<'PY'
+          import sys
+          row = None
+          with open(sys.argv[1]) as f:
+              for line in f:
+                  if line.startswith('#') or not line.strip():
+                      continue
+                  row = [float(v) for v in line.split(',')]
+          assert row is not None, "no data row in " + sys.argv[1]
+          lam, R, T, A, RT = row
+          assert abs(R - 0.04) < 2e-3, f"R={R} expected ~0.04"
+          assert abs(RT - 1.0) < 1e-3, f"R+T={RT} expected ~1 (energy conservation)"
+          assert abs(A) < 1e-3, f"A={A} expected ~0 (lossless)"
+          print(f"RCWA Fresnel OK: R={R:.5f}, T={T:.5f}, A={A:.5f}, R+T={RT:.5f}")
+          PY
+
       - name: Upload binaries (artifact)
         uses: actions/upload-artifact@v4
         with:

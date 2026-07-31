@@ -31,9 +31,7 @@ public:
     void sample(scalar z, 
         Eigen::MatrixXcs& P,
         Eigen::MatrixXcs& Q) override;
-    void sampleOnGPU(scalar z,
-        acacia::gpu::complex_t *P,
-        acacia::gpu::complex_t *Q) override {}
+    // GPU path not implemented for VarLayerSampler; inherits throwing default.
 private:
     void assignSimulationRegion() override;
 };

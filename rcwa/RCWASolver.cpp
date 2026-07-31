@@ -17,6 +17,39 @@
 using namespace std;
 using namespace Eigen;
 
+namespace {
+
+// 複素場行列 field を SaveOption に従って実数化し、CSV (行優先) に書き出す。
+//   modulation -> |field|,  realpart -> Re(field),  imagpart -> Im(field)
+// 1 行 = y(または z)スライスの一行、列 = x(または y/z)方向のサンプル点。
+void writeFieldCSV(const std::string& filename,
+                   const Eigen::MatrixXcs& field,
+                   SaveOption opt)
+{
+    std::ofstream fout(filename);
+    if (!fout)
+    {
+        std::cerr << "Cannot open field output file: " << filename << "\n";
+        return;
+    }
+    fout << std::setprecision(8);
+    for (int i = 0; i < field.rows(); ++i)
+    {
+        for (int j = 0; j < field.cols(); ++j)
+        {
+            const scalex v = field(i, j);
+            scalar out = (opt == realpart) ? v.real()
+                       : (opt == imagpart) ? v.imag()
+                       : std::abs(v);  // modulation (既定)
+            fout << out;
+            if (j + 1 < field.cols()) fout << ", ";
+        }
+        fout << "\n";
+    }
+}
+
+} // namespace
+
 
 RCWASolver::~RCWASolver()
 {
@@ -47,7 +80,9 @@ RCWASolver::RCWASolver(const RCWASolver& solver)
 	matKy_ = solver.matKy_;
 
 	enablePML_ = solver.enablePML_;
-	
+	kx0_ = solver.kx0_;
+	ky0_ = solver.ky0_;
+
 	for (auto layer : solver.layers_)
 	{
 		// should make a deep copy of Layer
@@ -224,8 +259,8 @@ void RCWASolver::evaluateAlphaBeta(
 			scalar m = i - Nx;
 			scalar n = j - Ny;
 
-			alpha.diagonal()(ny_ * i + j) = Kx * m;
-			beta.diagonal()(ny_ * i + j) = Ky * n;
+			alpha.diagonal()(ny_ * i + j) = Kx * m + kx0_;
+			beta.diagonal()(ny_ * i + j)  = Ky * n + ky0_;
 		}
 	}
 }
@@ -686,6 +721,12 @@ void RCWASolver::saveFieldImage(
 	std::vector< VectorXcs > c_p;
 	evaluateIntermediateField(c_m, c_p, inputCoeffs, layerStack, thickness);
 
+	if (c_m.empty() || c_p.empty())
+	{
+		std::cerr << "Cannot save field image: no interior layer to evaluate.\n";
+		return;
+	}
+
 	scalar startCoord1 = 0.;
 	scalar L1 = 0.;
 	scalar startCoord2 = 0.;
@@ -723,6 +764,7 @@ void RCWASolver::saveFieldImage(
 
 	int nRes1 = 500;
 	int nRes2 = static_cast<int>( nRes1 * L2 / L1);
+	if (nRes2 < 1) nRes2 = 1;   // L2=0 (ゼロ除算) を避ける
 
 	scalar step1 = L1 / nRes1;
 	scalar step2 = L2 / nRes2;
@@ -790,48 +832,75 @@ void RCWASolver::saveFieldImage(
 		MatrixXcs eigvecE, eigvecH;
 		layers_[layerType]->permuteEigVecX(eigvecE, eigvecH, tx, nx_, ny_);
 
+		const int nHarm = nx_ * ny_;
+
+		// 横方向成分 (Ex, Ey, Hx, Hy) はモード固有ベクトルから直接取り出す。
+		// 縦方向成分 (Ez, Hz) は Maxwell の回転方程式の z 成分から導出する。
 		if (fieldComponent == Ex || fieldComponent == Ey)
 		{
-
-			//const MatrixXcs& eigvecE = layers_[layerType]->eigvecE();
-			harmonics1D = eigvecE * (u_p + d_m);
+			harmonics1D = eigvecE * (u_p + d_m);  // [Ex; Ey]
+			const int off = (fieldComponent == Ey) ? nHarm : 0;
+			for (int i = 0; i < nx_; ++i)
+				for (int j = 0; j < ny_; ++j)
+					harmonics2d(i, j) = harmonics1D(j + i * ny_ + off);
 		}
 		else if (fieldComponent == Hx || fieldComponent == Hy)
 		{
-			// const MatrixXcs& eigvecH = layers_[layerType]->eigvecH();
-			harmonics1D = eigvecH * (u_p - d_m);
+			harmonics1D = eigvecH * (u_p - d_m);  // [Hx; Hy]
+			const int off = (fieldComponent == Hy) ? nHarm : 0;
+			for (int i = 0; i < nx_; ++i)
+				for (int j = 0; j < ny_; ++j)
+					harmonics2d(i, j) = harmonics1D(j + i * ny_ + off);
+		}
+		else if (fieldComponent == Hz)
+		{
+			// Faraday 則 (μ=1) の z 成分: ∂xEy − ∂yEx = iωμ₀Hz
+			// → Hz = (i/k0²)(kx·Ey − ky·Ex)  (コード内 H 規格化に整合)
+			if (Kx_.size() != nHarm)
+			{
+				std::cerr << "Hz evaluation requires periodic (non-PML) K matrices!\n";
+				return;
+			}
+			VectorXcs E = eigvecE * (u_p + d_m);  // [Ex; Ey]
+			scalar k0 = layers_[layerType]->k0();
+			VectorXcs Hz(nHarm);
+			for (int idx = 0; idx < nHarm; ++idx)
+				Hz(idx) = scalex(0, 1) / (k0 * k0)
+						* (Kx_(idx) * E(idx + nHarm) - Ky_(idx) * E(idx));
+			for (int i = 0; i < nx_; ++i)
+				for (int j = 0; j < ny_; ++j)
+					harmonics2d(i, j) = Hz(j + i * ny_);
+		}
+		else if (fieldComponent == Ez)
+		{
+			// Ampère 則の z 成分: ∂xHy − ∂yHx = −iωε₀ε·Ez
+			// → Ez = i·[[ε]]⁻¹(kx·Hy − ky·Hx)  ([[ε]] = 誘電率畳み込み行列)
+			if (Kx_.size() != nHarm)
+			{
+				std::cerr << "Ez evaluation requires periodic (non-PML) K matrices!\n";
+				return;
+			}
+			VectorXcs H = eigvecH * (u_p - d_m);  // [Hx; Hy]
+			VectorXcs rhs(nHarm);
+			for (int idx = 0; idx < nHarm; ++idx)
+				rhs(idx) = Kx_(idx) * H(idx + nHarm) - Ky_(idx) * H(idx);
+			MatrixXcs fe33 = layers_[layerType]->epsConvolution(nx_, ny_);
+			VectorXcs Ez = scalex(0, 1) * fe33.colPivHouseholderQr().solve(rhs);
+			for (int i = 0; i < nx_; ++i)
+				for (int j = 0; j < ny_; ++j)
+					harmonics2d(i, j) = Ez(j + i * ny_);
 		}
 		else
 		{
 			std::cerr << "Evaluation for this component is not implemented!\n";
 			return;
 		}
-
-		for (int i = 0; i < nx_; ++i)
-		{
-			for (int j = 0; j < ny_; ++j)
-			{
-				if (fieldComponent == Ex || 
-					fieldComponent == Hx)
-				{
-					harmonics2d(i, j) = harmonics1D(j + i * ny_);
-				}
-				else if (fieldComponent == Ey ||
-						 fieldComponent == Hy)
-				{
-					harmonics2d(i, j) = harmonics1D(j + i * ny_ + nx_ * ny_);
-				}
-				else 
-				{
-					std::cerr << "Evaluation for this component is not implemented!\n";
-					return;					
-				}
-				
-			}
-		}
 	};
 
 	MatrixXcs field(nRes2, nRes1);
+	// 場の再構成: f(r) = Σ_mn f_mn · exp(i·(kx0 + 2πm/Lx)·x + i·(ky0 + 2πn/Ly)·y)
+	// Bloch 波数オフセット kx0_/ky0_ を含めないと斜め入射で包絡線位相が欠落し、
+	// realpart/imagpart が周期部分のみになる (|f| は影響を受けない)。
 	if (sliceType == sliceXZ || sliceType == sliceYZ)
 	{
 		for (int i = 0; i < nRes2; ++i)
@@ -845,32 +914,38 @@ void RCWASolver::saveFieldImage(
 
 			if (sliceType == sliceXZ)
 			{
+				// y を sliceCoord に固定して y 方向ハーモニクスを畳み込む
 				VectorXcs waveletY(ny_);
 				int maxY = (ny_ - 1) / 2;
+				scalar Ly = layers_[layerType]->Ly();
 				for (int n = -maxY; n <= maxY; ++n)
 				{
-					waveletY(n+maxY) 
-					= exp(scalex(0, 2.* Pi * n / layers_[layerType]->Ly() * sliceCoord));
+					waveletY(n+maxY)
+					= exp(scalex(0, (2. * Pi * n / Ly + ky0_) * sliceCoord));
 				}
 
+				// (nx_ × ny_) · (ny_) → x ハーモニクスのベクトル
 				oneDirHarmonics = harmonics2D * waveletY;
 			}
 			else if (sliceType == sliceYZ)
 			{
+				// x を sliceCoord に固定して x 方向ハーモニクスを畳み込む
 				VectorXcs waveletX(nx_);
 				int maxX = (nx_ - 1) / 2;
+				scalar Lx = layers_[layerType]->Lx();
 				for (int m = -maxX; m <= maxX; ++m)
 				{
-					waveletX(m+maxX) = 
-					exp(scalex(0, 2. * Pi * m / layers_[layerType]->Lx() * sliceCoord));
+					waveletX(m+maxX) =
+					exp(scalex(0, (2. * Pi * m / Lx + kx0_) * sliceCoord));
 				}
 
-				oneDirHarmonics = harmonics2D * waveletX;
-			}		
+				// harmonics2D は (nx_ × ny_) なので y ハーモニクスを得るには転置が必要
+				oneDirHarmonics = harmonics2D.transpose() * waveletX;
+			}
 
 			for (int j = 0; j < nRes1; ++j)
 			{
-				auto SET_FIELD = [&](int nh, scalar Lh)
+				auto SET_FIELD = [&](int nh, scalar Lh, scalar kh0)
 				{
 					scalar h = sample1(j);
 					VectorXcs waveletH(nh);
@@ -878,23 +953,26 @@ void RCWASolver::saveFieldImage(
 
 					for (int m = -maxH; m <= maxH; ++m)
 					{
-						waveletH(m + maxH) 
-						= exp(scalex(0, 2.* Pi * m / Lh * h));
+						waveletH(m + maxH)
+						= exp(scalex(0, (2. * Pi * m / Lh + kh0) * h));
 					}
 
-					field(i, j) = waveletH.dot(oneDirHarmonics);				
+					// dot() は第一引数を共役するため transpose() で内積を取る。
+					// 結果は 1x1 の Eigen 式なので .value() でスカラーに落とす
+					// (libc++ は Product -> std::complex の暗黙変換を通さない)。
+					field(i, j) = (waveletH.transpose() * oneDirHarmonics).value();
 				};
 
 				if (sliceType == sliceXZ)
 				{
-					SET_FIELD(nx_, layers_[layerType]->Lx());			
+					SET_FIELD(nx_, layers_[layerType]->Lx(), kx0_);
 				}
 				else if (sliceType == sliceYZ)
 				{
-					SET_FIELD(ny_, layers_[layerType]->Ly());
+					SET_FIELD(ny_, layers_[layerType]->Ly(), ky0_);
 				}
 			}
-		}		
+		}
 	}
 	else if (sliceType == sliceXY)
 	{
@@ -914,14 +992,14 @@ void RCWASolver::saveFieldImage(
 				int maxX = (nx_ - 1) / 2;
 				for (int m = -maxX; m <= maxX; ++m)
 				{
-					waveletX(m+maxX) = exp(scalex(0, 2. * Pi * m / L1 * x));
+					waveletX(m+maxX) = exp(scalex(0, (2. * Pi * m / L1 + kx0_) * x));
 				}
 
 				VectorXcs waveletY(ny_);
 				int maxY = (ny_ - 1) / 2;
 				for (int n = -maxY; n <= maxY; ++n)
 				{
-					waveletY(n+maxY) = exp(scalex(0, 2. * Pi * n / L2 * y));
+					waveletY(n+maxY) = exp(scalex(0, (2. * Pi * n / L2 + ky0_) * y));
 				}
 
 				field(i, j) = (waveletX.transpose() * harmonics2D * waveletY).eval()(0, 0);
@@ -929,9 +1007,8 @@ void RCWASolver::saveFieldImage(
 		}
 	}
 
-	// MatrixVisualizer vis(field);
-	// vis.setXTimes(1);
-	// vis.save(filename, realpart);	
+	// 計算した場 (Ex/Ey/Ez/Hx/Hy/Hz いずれか) を CSV に書き出す。
+	writeFieldCSV(filename, field, opt);
 }
 
 void RCWASolver::saveFieldImage(const std::string& filename,
@@ -950,6 +1027,12 @@ void RCWASolver::saveFieldImage(const std::string& filename,
 	std::vector< VectorXcs > c_p;
 	evaluateIntermediateField(c_m, c_p, inputMode, layerStack, thickness);
 
+	if (c_m.empty() || c_p.empty())
+	{
+		std::cerr << "Cannot save field image: no interior layer to evaluate.\n";
+		return;
+	}
+
 	scalar startCoord1 = 0.;
 	scalar L1 = 0.;
 	scalar startCoord2 = 0.;
@@ -987,6 +1070,7 @@ void RCWASolver::saveFieldImage(const std::string& filename,
 
 	int nRes1 = 500;
 	int nRes2 = static_cast<int>( nRes1 * L2 / L1);
+	if (nRes2 < 1) nRes2 = 1;   // L2=0 (ゼロ除算) を避ける
 
 	scalar step1 = L1 / nRes1;
 	scalar step2 = L2 / nRes2;
@@ -1054,48 +1138,75 @@ void RCWASolver::saveFieldImage(const std::string& filename,
 		MatrixXcs eigvecE, eigvecH;
 		layers_[layerType]->permuteEigVecX(eigvecE, eigvecH, tx, nx_, ny_);
 
+		const int nHarm = nx_ * ny_;
+
+		// 横方向成分 (Ex, Ey, Hx, Hy) はモード固有ベクトルから直接取り出す。
+		// 縦方向成分 (Ez, Hz) は Maxwell の回転方程式の z 成分から導出する。
 		if (fieldComponent == Ex || fieldComponent == Ey)
 		{
-
-			//const MatrixXcs& eigvecE = layers_[layerType]->eigvecE();
-			harmonics1D = eigvecE * (u_p + d_m);
+			harmonics1D = eigvecE * (u_p + d_m);  // [Ex; Ey]
+			const int off = (fieldComponent == Ey) ? nHarm : 0;
+			for (int i = 0; i < nx_; ++i)
+				for (int j = 0; j < ny_; ++j)
+					harmonics2d(i, j) = harmonics1D(j + i * ny_ + off);
 		}
 		else if (fieldComponent == Hx || fieldComponent == Hy)
 		{
-			// const MatrixXcs& eigvecH = layers_[layerType]->eigvecH();
-			harmonics1D = eigvecH * (u_p - d_m);
+			harmonics1D = eigvecH * (u_p - d_m);  // [Hx; Hy]
+			const int off = (fieldComponent == Hy) ? nHarm : 0;
+			for (int i = 0; i < nx_; ++i)
+				for (int j = 0; j < ny_; ++j)
+					harmonics2d(i, j) = harmonics1D(j + i * ny_ + off);
+		}
+		else if (fieldComponent == Hz)
+		{
+			// Faraday 則 (μ=1) の z 成分: ∂xEy − ∂yEx = iωμ₀Hz
+			// → Hz = (i/k0²)(kx·Ey − ky·Ex)  (コード内 H 規格化に整合)
+			if (Kx_.size() != nHarm)
+			{
+				std::cerr << "Hz evaluation requires periodic (non-PML) K matrices!\n";
+				return;
+			}
+			VectorXcs E = eigvecE * (u_p + d_m);  // [Ex; Ey]
+			scalar k0 = layers_[layerType]->k0();
+			VectorXcs Hz(nHarm);
+			for (int idx = 0; idx < nHarm; ++idx)
+				Hz(idx) = scalex(0, 1) / (k0 * k0)
+						* (Kx_(idx) * E(idx + nHarm) - Ky_(idx) * E(idx));
+			for (int i = 0; i < nx_; ++i)
+				for (int j = 0; j < ny_; ++j)
+					harmonics2d(i, j) = Hz(j + i * ny_);
+		}
+		else if (fieldComponent == Ez)
+		{
+			// Ampère 則の z 成分: ∂xHy − ∂yHx = −iωε₀ε·Ez
+			// → Ez = i·[[ε]]⁻¹(kx·Hy − ky·Hx)  ([[ε]] = 誘電率畳み込み行列)
+			if (Kx_.size() != nHarm)
+			{
+				std::cerr << "Ez evaluation requires periodic (non-PML) K matrices!\n";
+				return;
+			}
+			VectorXcs H = eigvecH * (u_p - d_m);  // [Hx; Hy]
+			VectorXcs rhs(nHarm);
+			for (int idx = 0; idx < nHarm; ++idx)
+				rhs(idx) = Kx_(idx) * H(idx + nHarm) - Ky_(idx) * H(idx);
+			MatrixXcs fe33 = layers_[layerType]->epsConvolution(nx_, ny_);
+			VectorXcs Ez = scalex(0, 1) * fe33.colPivHouseholderQr().solve(rhs);
+			for (int i = 0; i < nx_; ++i)
+				for (int j = 0; j < ny_; ++j)
+					harmonics2d(i, j) = Ez(j + i * ny_);
 		}
 		else
 		{
 			std::cerr << "Evaluation for this component is not implemented!\n";
 			return;
 		}
-
-		for (int i = 0; i < nx_; ++i)
-		{
-			for (int j = 0; j < ny_; ++j)
-			{
-				if (fieldComponent == Ex || 
-					fieldComponent == Hx)
-				{
-					harmonics2d(i, j) = harmonics1D(j + i * ny_);
-				}
-				else if (fieldComponent == Ey ||
-						 fieldComponent == Hy)
-				{
-					harmonics2d(i, j) = harmonics1D(j + i * ny_ + nx_ * ny_);
-				}
-				else 
-				{
-					std::cerr << "Evaluation for this component is not implemented!\n";
-					return;					
-				}
-				
-			}
-		}
 	};
 
 	MatrixXcs field(nRes2, nRes1);
+	// 場の再構成: f(r) = Σ_mn f_mn · exp(i·(kx0 + 2πm/Lx)·x + i·(ky0 + 2πn/Ly)·y)
+	// Bloch 波数オフセット kx0_/ky0_ を含めないと斜め入射で包絡線位相が欠落し、
+	// realpart/imagpart が周期部分のみになる (|f| は影響を受けない)。
 	if (sliceType == sliceXZ || sliceType == sliceYZ)
 	{
 		for (int i = 0; i < nRes2; ++i)
@@ -1109,32 +1220,38 @@ void RCWASolver::saveFieldImage(const std::string& filename,
 
 			if (sliceType == sliceXZ)
 			{
+				// y を sliceCoord に固定して y 方向ハーモニクスを畳み込む
 				VectorXcs waveletY(ny_);
 				int maxY = (ny_ - 1) / 2;
+				scalar Ly = layers_[layerType]->Ly();
 				for (int n = -maxY; n <= maxY; ++n)
 				{
-					waveletY(n+maxY) 
-					= exp(scalex(0, 2.* Pi * n / layers_[layerType]->Ly() * sliceCoord));
+					waveletY(n+maxY)
+					= exp(scalex(0, (2. * Pi * n / Ly + ky0_) * sliceCoord));
 				}
 
+				// (nx_ × ny_) · (ny_) → x ハーモニクスのベクトル
 				oneDirHarmonics = harmonics2D * waveletY;
 			}
 			else if (sliceType == sliceYZ)
 			{
+				// x を sliceCoord に固定して x 方向ハーモニクスを畳み込む
 				VectorXcs waveletX(nx_);
 				int maxX = (nx_ - 1) / 2;
+				scalar Lx = layers_[layerType]->Lx();
 				for (int m = -maxX; m <= maxX; ++m)
 				{
-					waveletX(m+maxX) = 
-					exp(scalex(0, 2. * Pi * m / layers_[layerType]->Lx() * sliceCoord));
+					waveletX(m+maxX) =
+					exp(scalex(0, (2. * Pi * m / Lx + kx0_) * sliceCoord));
 				}
 
-				oneDirHarmonics = harmonics2D * waveletX;
-			}		
+				// harmonics2D は (nx_ × ny_) なので y ハーモニクスを得るには転置が必要
+				oneDirHarmonics = harmonics2D.transpose() * waveletX;
+			}
 
 			for (int j = 0; j < nRes1; ++j)
 			{
-				auto SET_FIELD = [&](int nh, scalar Lh)
+				auto SET_FIELD = [&](int nh, scalar Lh, scalar kh0)
 				{
 					scalar h = sample1(j);
 					VectorXcs waveletH(nh);
@@ -1142,23 +1259,26 @@ void RCWASolver::saveFieldImage(const std::string& filename,
 
 					for (int m = -maxH; m <= maxH; ++m)
 					{
-						waveletH(m + maxH) 
-						= exp(scalex(0, 2.* Pi * m / Lh * h));
+						waveletH(m + maxH)
+						= exp(scalex(0, (2. * Pi * m / Lh + kh0) * h));
 					}
 
-					field(i, j) = waveletH.dot(oneDirHarmonics);				
+					// dot() は第一引数を共役するため transpose() で内積を取る。
+					// 結果は 1x1 の Eigen 式なので .value() でスカラーに落とす
+					// (libc++ は Product -> std::complex の暗黙変換を通さない)。
+					field(i, j) = (waveletH.transpose() * oneDirHarmonics).value();
 				};
 
 				if (sliceType == sliceXZ)
 				{
-					SET_FIELD(nx_, layers_[layerType]->Lx());			
+					SET_FIELD(nx_, layers_[layerType]->Lx(), kx0_);
 				}
 				else if (sliceType == sliceYZ)
 				{
-					SET_FIELD(ny_, layers_[layerType]->Ly());
+					SET_FIELD(ny_, layers_[layerType]->Ly(), ky0_);
 				}
 			}
-		}		
+		}
 	}
 	else if (sliceType == sliceXY)
 	{
@@ -1178,14 +1298,14 @@ void RCWASolver::saveFieldImage(const std::string& filename,
 				int maxX = (nx_ - 1) / 2;
 				for (int m = -maxX; m <= maxX; ++m)
 				{
-					waveletX(m+maxX) = exp(scalex(0, 2. * Pi * m / L1 * x));
+					waveletX(m+maxX) = exp(scalex(0, (2. * Pi * m / L1 + kx0_) * x));
 				}
 
 				VectorXcs waveletY(ny_);
 				int maxY = (ny_ - 1) / 2;
 				for (int n = -maxY; n <= maxY; ++n)
 				{
-					waveletY(n+maxY) = exp(scalex(0, 2. * Pi * n / L2 * y));
+					waveletY(n+maxY) = exp(scalex(0, (2. * Pi * n / L2 + ky0_) * y));
 				}
 
 				field(i, j) = (waveletX.transpose() * harmonics2D * waveletY).eval()(0, 0);
@@ -1194,9 +1314,8 @@ void RCWASolver::saveFieldImage(const std::string& filename,
 	}
 
 
-	// MatrixVisualizer vis(field);
-	// vis.setXTimes(1);
-	// vis.save(filename, realpart);
+	// 計算した場 (Ex/Ey/Ez/Hx/Hy/Hz いずれか) を CSV に書き出す。
+	writeFieldCSV(filename, field, opt);
 }
 
 
@@ -1244,6 +1363,7 @@ void RCWASolver::saveDeviceImage(const std::string& filename,
 
 	int nRes1 = 2000;
 	int nRes2 = static_cast<int>( nRes1 * L2 / L1);
+	if (nRes2 < 1) nRes2 = 1;   // L2=0 (ゼロ除算) を避ける
 
 	scalar step1 = L1 / nRes1;
 	scalar step2 = L2 / nRes2;
@@ -1285,6 +1405,12 @@ void RCWASolver::saveDeviceImage(const std::string& filename,
 					break;
 				}
 				z0 = z1;
+			}
+			if (layer1 < 0)
+			{
+				std::cerr << "Device image requires at least one finite-thickness "
+							 "interior layer!\n";
+				return;
 			}
 			int layerType = layerStack[layer1];
 			scalar tx = 0.;
@@ -1329,6 +1455,12 @@ void RCWASolver::saveDeviceImage(const std::string& filename,
 			}
 			z0 = z1;
 		}
+		if (layer1 < 0)
+		{
+			std::cerr << "Device image requires at least one finite-thickness "
+						 "interior layer!\n";
+			return;
+		}
 		int layerType = layerStack[layer1];
 		scalar tx = 0.;
 		if (translation != nullptr)
@@ -1349,9 +1481,9 @@ void RCWASolver::saveDeviceImage(const std::string& filename,
 	}
 
 
-	// MatrixVisualizer vis(device);
-	// vis.setXTimes(1);
-	// vis.save(filename, realpart);	
+	// 誘電率分布 (実部) を CSV に書き出す。損失材料の虚部を見たい場合は
+	// imagpart を渡すこと。
+	writeFieldCSV(filename, device, realpart);
 }
 
 
@@ -1385,6 +1517,18 @@ void RCWASolver::evaluateIntermediateField(
 
 	int nDim = 2 * nx_ * ny_;
 	int nL = layerStack.size();
+
+	// 中間層の場は「入射側/透過側の半無限層に挟まれた有限厚の層」に対して
+	// のみ定義される。層が 2 枚以下だと内部層が存在せず、以降の添字計算が
+	// 負インデックスになる (旧実装はここで領域外書き込みをして落ちていた)。
+	if (nL < 3)
+	{
+		std::cerr << "Intermediate field requires at least one finite-thickness "
+					 "interior layer (got " << nL << " layers)!\n";
+		c_m.clear();
+		c_p.clear();
+		return;
+	}
 
 	std::vector< MatrixXcs > S11;
 	std::vector< MatrixXcs > S12;
@@ -1516,6 +1660,18 @@ void RCWASolver::evaluateIntermediateField(
 	int nDim = 2 * nx_ * ny_;
 	int nL = layerStack.size();
 
+	// 中間層の場は「入射側/透過側の半無限層に挟まれた有限厚の層」に対して
+	// のみ定義される。層が 2 枚以下だと内部層が存在せず、以降の添字計算が
+	// 負インデックスになる (旧実装はここで領域外書き込みをして落ちていた)。
+	if (nL < 3)
+	{
+		std::cerr << "Intermediate field requires at least one finite-thickness "
+					 "interior layer (got " << nL << " layers)!\n";
+		c_m.clear();
+		c_p.clear();
+		return;
+	}
+
 	std::vector< MatrixXcs > S11;
 	std::vector< MatrixXcs > S12;
 	std::vector< MatrixXcs > S21;
@@ -1620,8 +1776,8 @@ void RCWASolver::evaluateIntermediateField(
 
 
 void RCWASolver::generateHorizontalPlaneWave(
-	scalar px,
-	scalar py,
+	scalex px,
+	scalex py,
 	int layerType,
 	Eigen::VectorXcs& c)
 {
@@ -1666,8 +1822,12 @@ void RCWASolver::scatterPlaneWave(
 	scalex eps_ref = layers_[refLayerType]->eps(.0, .0);
 	scalex eps_trn = layers_[trnLayerType]->eps(.0, .0);
 
-	scalex kref2 = k0 * k0 * eps_ref;
-	scalex ktrn2 = k0 * k0 * eps_trn;
+	// 半無限媒質の波数は k² = k0²·ε·μ (磁性媒質では μ を落とせない)。
+	scalex mu_ref = layers_[refLayerType]->mu(.0, .0);
+	scalex mu_trn = layers_[trnLayerType]->mu(.0, .0);
+
+	scalex kref2 = k0 * k0 * eps_ref * mu_ref;
+	scalex ktrn2 = k0 * k0 * eps_trn * mu_trn;
 
 
 	for (int i = 0; i < nDim; ++i)
@@ -1727,10 +1887,22 @@ void RCWASolver::scatterPlaneWave(
 		Kztrn_r(i) = abs(Kztrn(i).real());
 	}
 
-	// we only excite and receive plane wave in dielectric material
-	// metal is not supported for excitation and receiver
-	// (both are normalized by the incident wavevector k0*sqrt(eps_ref):
-	//  power per order = Re(kz)/kz_inc * |amplitude|^2)
-	REF = 1. / (sqrt(eps_ref.real()) * k0) * Kzref_r.asDiagonal() * r;
-	TRN = 1. / (sqrt(eps_ref.real()) * k0) * Kztrn_r.asDiagonal() * t;
+	// 正規化: TE/TM 単位振幅規約 (|E_inc_3D|² = 1) を前提とする。
+	// RCWADriver は (px, py) を単位 3D 振幅のベクトルに設定するため、
+	// 入射ポインティング束 S_z^inc ∝ kzinc * 1 = kzinc (= n_inc·k0·cosθ)。
+	// よって R(i) = kzref(i)*r_3D(i)/kzinc, T(i) = kztrn(i)*t_3D(i)/kzinc。
+	// r_3D(i) = |rx|² + |ry|² + |rz|² は 3D 電場振幅二乗であり、
+	// ガウス則 kx·Ex + ky·Ey + kz·Ez = 0 から得られる rz/tz も含む。
+	const int incOrd = ny_ * (nx_ - 1) / 2 + (ny_ - 1) / 2;
+	const scalar Kzinc = Kzref_r(incOrd);  // = |kz_inc| = n_inc*k0*cos(θ)
+	if (Kzinc < 1e-12 * k0) {
+		std::cerr << "Warning: incident kz is near zero (grazing incidence?)\n";
+		return;
+	}
+	// 磁性媒質では H = (k×E)/(ωμ₀μr) なので、与えられた |E|² に対する
+	// ポインティング束は S_z ∝ kz/μr。反射側は入射側と同じ層なので μ が
+	// 約分されるが、透過側は μ_ref/μ_trn の比が残る。
+	const scalar muRatio = std::abs(mu_ref / mu_trn);
+	REF = (1.0 / Kzinc) * Kzref_r.asDiagonal() * r;
+	TRN = (muRatio / Kzinc) * Kztrn_r.asDiagonal() * t;
 }

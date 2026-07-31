@@ -13,7 +13,14 @@
       "Bash(rg:*)",
       "Bash(ls:*)",
       "Bash(./bin/orcwa:*)",
-      "Bash(./bin/orcwa_post:*)"
+      "Bash(./bin/orcwa_post:*)",
+      "Bash(./bin/orcwa_rcwa:*)",
+      "Bash(./bin/tests/test_rcwa_input:*)",
+      "Read(rcwa/**)",
+      "Read(tests/**)",
+      "Read(src/**)",
+      "Read(core/**)",
+      "Read(ci/**)"
     ],
     "deny": [
       "Bash(git push --force:*)",

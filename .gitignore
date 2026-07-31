@@ -6,6 +6,9 @@
 __pycache__/
 *.pyc
 
+# RCWA solver output spectra
+*_rcwa.csv
+
 # Prerequisites
 *.d
 

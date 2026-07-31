@@ -200,6 +200,21 @@ if(WITH_RCWA)
     # tests/CMakeLists.txt は BUILD_GPU を参照する
     set(BUILD_GPU ${WITH_CUDA})
     add_subdirectory(tests)
+
+    # .orcwa 入力ファイルを RCWA ソルバで解く実行ファイル
+    # (FDTD ソルバと同じ入力形式を共有し、層状周期構造として解釈する)
+    add_executable(orcwa_rcwa
+        ${CMAKE_SOURCE_DIR}/src/rcwa_Main.cpp
+        ${RCWA_SRC_FILES})
+    target_include_directories(orcwa_rcwa PUBLIC
+        ${CMAKE_SOURCE_DIR}
+        ${MKL_INCLUDE_DIR}
+        ${EIGEN3_INCLUDE_DIRS})
+    target_link_libraries(orcwa_rcwa PRIVATE
+        ${MKL_LIBRARIES}
+        ${TBB_LIBRARIES}
+        m stdc++)
+    set_property(TARGET orcwa_rcwa PROPERTY CXX_STANDARD 17)
 endif()
 
 # ============================================================
