@@ -9,6 +9,7 @@ solver
 #undef MAIN
 
 #include "orcwa_prototype.h"
+#include "orcwa_rcwa.h"
 
 static void args(int, char *[], int *, int *, char [], char []);
 static void error_check(int, int);
@@ -73,6 +74,24 @@ int main(int argc, char *argv[])
 		// thread and process
 		sprintf(str, "CPU, thread=%d, process=1, vector=%s", nthread, (VECTOR ? "on" : "off"));
 		monitor1(fp_log, str);
+	}
+
+	// RCWA モード: rcwalayer が定義されていれば RCWA コアで解いて終了
+	// (FDTD のメッシュ/時間ループは使わない)
+	if (NRcwaLayer > 0) {
+		ierr = rcwa_run(fp_log);
+		if (io && !ierr) {
+			monitor1(fp_log, "=== normal end ===");
+			cpu[1] = cputime();
+			sprintf(str, "cpu time = %.3f [sec]", cpu[1] - cpu[0]);
+			monitor1(fp_log, str);
+			if (fp_log != NULL) {
+				fclose(fp_log);
+			}
+		}
+		error_check(ierr, prompt);
+		if (io && prompt) getchar();
+		return 0;
 	}
 
 	// plot geometry 3d and exit

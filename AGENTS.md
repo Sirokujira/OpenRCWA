@@ -1,31 +1,42 @@
 # AGENTS.md — OpenRCWA
 
 OpenRCWA は周期構造の電磁界解析ソルバ集。RCWA (厳密結合波解析) エンジンと
-OpenFDTD 由来の FDTD ソルバ (C / Python / CUDA) を含み、`.orcwa` 入力形式を共有する。
+OpenFDTD 由来の FDTD ソルバ (C / Python / CUDA) を含む。
 
-このファイルは AI エージェント向けの作業規約。**「物理・実装規約」の節は、
+実行ファイルは 2 系統ある:
+
+- **`orcwa`** — FDTD ソルバ。`.ofd` 入力。`rcwa` / `rcwalayer` キーがあれば
+  `sol/rcwa_bridge.cpp` 経由で RCWA コアに分岐し `rcwa_efficiency.csv` を出す。
+- **`orcwa_rcwa`** — RCWA 専用ドライバ。`.orcwa` 入力 (`rcwa/RCWAInput` /
+  `rcwa/RCWADriver`)。斜め入射・2D 格子・任意偏波・場出力に対応。
+
+このファイルは AI エージェント向けの作業規約。**「物理規約」「落とし穴」の節は、
 知らずに触ると結果が静かに壊れる箇所**なので、`rcwa/` 配下を変更する前に必ず読むこと。
 
 ## ビルド
 
 ```bash
 # 依存パッケージ (Ubuntu)
-sudo apt-get install -y libblas-dev liblapack-dev liblapacke-dev \
-                        libeigen3-dev libhdf5-dev
+sudo apt-get install -y cmake gcc g++ libhdf5-dev \
+                        liblapack-dev liblapacke-dev libeigen3-dev
 
-# 構成 (MKL/TBB/GPU はなくてもよい — 自動で Eigen ソルバにフォールバック)
-cmake -S . -B build -DBUILD_GPU=OFF
-
-# 主要ターゲット
-cmake --build build --target orcwa_rcwa test_rcwa_input -j$(nproc)
+# 構成 (MKL/TBB/CUDA はなくてもよい — 自動で Eigen ソルバにフォールバック)
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DWITH_CUDA=OFF -DWITH_MPI=OFF
+cmake --build build -j"$(nproc)"
 ```
 
 生成物は `bin/` (実行ファイル) と `bin/tests/` (テスト) に置かれる。
+`WITH_RCWA` (既定 ON) が制御するのは `tests/` のテストバイナリだけで、
+`rcwa/*.cpp` の RCWA コアは常にビルドされる。
 
 ## テスト
 
 ```bash
 ./bin/tests/test_rcwa_input   # RCWA 単体テスト (パーサ/ドライバ/場出力)
+
+# .ofd 経路の RCWA スモーク (全周波数・両偏波で |R+T-1| <= 3e-3)
+mkdir -p /tmp/smoke && cp data/sample/grating.ofd /tmp/smoke/ && cd /tmp/smoke
+$OLDPWD/bin/orcwa -n 2 grating.ofd && cat rcwa_efficiency.csv
 ```
 
 - 終了コード = 失敗数。`All tests PASSED` が成功の目印。
@@ -49,15 +60,17 @@ cmake --build build --target orcwa_rcwa test_rcwa_input -j$(nproc)
 
 | パス | 内容 |
 |---|---|
-| `rcwa/` | RCWA エンジン本体 (`RCWASolver`, `Layer`, Fourier ソルバ) と `.orcwa` パーサ (`RCWAInput`) / ドライバ (`RCWADriver`) |
-| `src/` | 実行ファイルの main (`rcwa_Main.cpp` = orcwa_rcwa, ほか FDTD 系) |
-| `core/` | 積分器・レイヤサンプラ (RCWA 応用層) |
-| `sol/`, `include/` | FDTD ソルバ (C) |
-| `python/` | FDTD ソルバ (Python + Numba) |
+| `rcwa/` | RCWA エンジン本体 (`RCWASolver`, `Layer`, Fourier ソルバ, `MKLEigenSolver.hpp`) と `.orcwa` パーサ (`RCWAInput`) / ドライバ (`RCWADriver`) |
+| `sol/` | FDTD 処理本体 (C) + `rcwa_bridge.cpp` (`.ofd` → RCWA コア) |
+| `src/` | 実行ファイルの main (`sol_Main.c` = orcwa, `rcwa_Main.cpp` = orcwa_rcwa) |
+| `core/` | 積分器・レイヤサンプラ (導波モード基底の別系統。テストからのみ到達) |
+| `include/` | FDTD 共通ヘッダ |
+| `python/` | FDTD ソルバ (Python + Numba)・入力生成スクリプト |
 | `cuda/`, `cuda_mpi/`, `gpu/` | GPU 実装 |
 | `gdstk/` | GDSII 読み込みライブラリ (ベンダリング) |
+| `post/` | ポスト処理 (`orcwa_post`) |
 | `tests/` | 単体テスト (`test_rcwa_input.cpp` が RCWA 系の主テスト) |
-| `ci/` | CI 用スモークテスト入力 |
+| `ci/`, `data/sample/` | CI 用スモークテスト入力 |
 
 ## 物理規約 (違反すると結果が静かに壊れる)
 
@@ -108,6 +121,19 @@ cmake --build build --target orcwa_rcwa test_rcwa_input -j$(nproc)
   `far1d*` / `far2d*` / `near*` と時間領域固有の設定は FDTD 専用として黙殺する
   (`isFDTDOnlyKeyword`)。FDTD 側にキーワードが増えても誤警告しないよう
   接頭辞判定にしてある。
+
+## 数値安定性 (実際に踏んだもの — 外さないこと)
+
+- 固有値ソルバーは `rcwa/MKLEigenSolver.hpp` の 3 分岐
+  (MKL / LAPACKE / Eigen フォールバック)。**±m 次数の縮退固有値**で
+  固有ベクトル基底が不良条件になり回折効率が発散する事象があるため、
+  Eigen 経路には対角への非一様微小摂動 (~1e-11·‖A‖)、LAPACKE 経路には
+  残差検算 ‖A·V−V·D‖ + Eigen 解き直しが入っている。**削除しない**。
+- `EIGEN_DONT_PARALLELIZE` は OpenMP との競合回避。外さない。
+- C99 VLA 禁止 (MSVC 対応)。libm は `MATH_LIB` 変数経由。
+- Windows CI は `-DWITH_RCWA=OFF` (テストバイナリのみ無効) だが、RCWA 本体は
+  Windows でも動作しスモークに合格している。OFF の理由は `gdstk/utils.cpp` が
+  LAPACK の `dgesv_` を直接呼ぶため。
 
 ## 落とし穴 (Gotchas)
 

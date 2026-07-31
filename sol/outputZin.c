@@ -85,8 +85,12 @@ static void write_input_impedance_data_to_hdf5()
     hid_t file_id, group_id, dataset_id, dataspace_id, memtype_id;
     herr_t status;
 
-    // input_impedance_data_t 型のデータを保持する配列を作成
-    input_impedance_data_t data[NFeed][NFreq1];
+    // input_impedance_data_t 型のデータを保持する配列を作成 (MSVC は C99 VLA 非対応のため malloc で確保)
+    input_impedance_data_t *data = (input_impedance_data_t *)malloc((size_t)NFeed * NFreq1 * sizeof(input_impedance_data_t));
+    if (data == NULL) {
+        fprintf(stderr, "Error allocating memory for input impedance data\n");
+        return;
+    }
 
     // input impedance データの計算
     for (int ifeed = 0; ifeed < NFeed; ifeed++) {
@@ -95,13 +99,14 @@ static void write_input_impedance_data_to_hdf5()
             const d_complex_t yin = d_inv(Zin[id]);
             const double gamma = pow(10, Ref[id] / 20);
             const double vswr = (fabs(1 - gamma) > EPS) ? (1 + gamma) / (1 - gamma) : 1000;
-            data[ifeed][ifreq].frequency = Freq1[ifreq];
-            data[ifeed][ifreq].rin = Zin[id].r;
-            data[ifeed][ifreq].xin = Zin[id].i;
-            data[ifeed][ifreq].gin = yin.r * 1e3;
-            data[ifeed][ifreq].bin = yin.i * 1e3;
-            data[ifeed][ifreq].ref = Ref[id];
-            data[ifeed][ifreq].vswr = vswr;
+            const size_t did = (size_t)ifeed * NFreq1 + ifreq;
+            data[did].frequency = Freq1[ifreq];
+            data[did].rin = Zin[id].r;
+            data[did].xin = Zin[id].i;
+            data[did].gin = yin.r * 1e3;
+            data[did].bin = yin.i * 1e3;
+            data[did].ref = Ref[id];
+            data[did].vswr = vswr;
         }
     }
 
@@ -109,6 +114,7 @@ static void write_input_impedance_data_to_hdf5()
     file_id = H5Fopen(FILE_NAME, H5F_ACC_RDWR, H5P_DEFAULT);
     if (file_id < 0) {
         fprintf(stderr, "Error opening file: %s\n", FILE_NAME);
+        free(data);
         return;
     }
 
@@ -117,6 +123,7 @@ static void write_input_impedance_data_to_hdf5()
     if (group_id < 0) {
         fprintf(stderr, "Error opening group: %s\n", GROUP_NAME);
         H5Fclose(file_id);
+        free(data);
         return;
     }
 
@@ -142,6 +149,7 @@ static void write_input_impedance_data_to_hdf5()
         H5Tclose(memtype_id);
         H5Gclose(group_id);
         H5Fclose(file_id);
+        free(data);
         return;
     }
 
@@ -157,6 +165,7 @@ static void write_input_impedance_data_to_hdf5()
     H5Tclose(memtype_id);
     H5Gclose(group_id);
     H5Fclose(file_id);
+    free(data);
 }
 
 static void _outputZin(FILE *fp)

@@ -31,16 +31,21 @@ void write_coupling_data_to_hdf5()
     hid_t file_id, group_id, dataset_id, dataspace_id, datatype_id;
     herr_t status;
 
-    // coupling_data_t 型のデータを保持する配列を作成
-    coupling_data_t data[NFreq1][NFeed][NPoint];
+    // coupling_data_t 型のデータを保持する配列を作成 (MSVC は C99 VLA 非対応のため malloc で確保)
+    coupling_data_t *data = (coupling_data_t *)malloc((size_t)NFreq1 * NFeed * NPoint * sizeof(coupling_data_t));
+    if (data == NULL) {
+        fprintf(stderr, "Error allocating memory for coupling data\n");
+        return;
+    }
 
     // coupling データの計算
     for (int ifreq = 0; ifreq < NFreq1; ifreq++) {
         for (int ifeed = 0; ifeed < NFeed; ifeed++) {
             for (int ipoint = 0; ipoint < NPoint; ipoint++) {
                 const d_complex_t couple = coupling(ifeed, ipoint, ifreq);
-                data[ifreq][ifeed][ipoint].magnitude_dB = 20 * log10(fmax(d_abs(couple), EPS2));
-                data[ifreq][ifeed][ipoint].phase_deg = d_deg(couple);
+                const size_t id = ((size_t)ifreq * NFeed + ifeed) * (size_t)NPoint + ipoint;
+                data[id].magnitude_dB = 20 * log10(fmax(d_abs(couple), EPS2));
+                data[id].phase_deg = d_deg(couple);
             }
         }
     }
@@ -49,6 +54,7 @@ void write_coupling_data_to_hdf5()
     file_id = H5Fopen(FILE_NAME, H5F_ACC_RDWR, H5P_DEFAULT);
     if (file_id < 0) {
         fprintf(stderr, "Error opening file: %s\n", FILE_NAME);
+        free(data);
         return;
     }
 
@@ -57,6 +63,7 @@ void write_coupling_data_to_hdf5()
     if (group_id < 0) {
         fprintf(stderr, "Error opening group: %s\n", GROUP_NAME);
         H5Fclose(file_id);
+        free(data);
         return;
     }
 
@@ -76,6 +83,7 @@ void write_coupling_data_to_hdf5()
         H5Sclose(dataspace_id);
         H5Gclose(group_id);
         H5Fclose(file_id);
+        free(data);
         return;
     }
 
@@ -91,6 +99,7 @@ void write_coupling_data_to_hdf5()
     H5Tclose(datatype_id);
     H5Gclose(group_id);
     H5Fclose(file_id);
+    free(data);
 }
 
 static void _outputCoupling(FILE *fp)

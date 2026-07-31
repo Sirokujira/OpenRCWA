@@ -13,6 +13,18 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# ── Windows (MSVC) 対応 ──────────────────────────────────────────────
+# libm は存在しない (MATH_LIB を空にする)。ソースは UTF-8 (日本語コメント)。
+# M_PI 等は _USE_MATH_DEFINES が必要。
+if(MSVC)
+    add_compile_options(/utf-8)
+    add_compile_definitions(_USE_MATH_DEFINES _CRT_SECURE_NO_WARNINGS NOMINMAX)
+    set(MATH_LIB "")
+else()
+    set(MATH_LIB m)
+endif()
+
 find_package(Threads REQUIRED)
 find_package(OpenMP REQUIRED)
 
@@ -64,15 +76,34 @@ if(MKL_FOUND)
     add_definitions(-DEIGEN_WITH_MKL_ALL -DUSE_MKL)
 else()
     message(STATUS "MKL が見つかりません。Eigen の固有値ソルバを使用します。")
-    # gdstk/utils.cpp が LAPACK (dgesv_) を直接呼ぶため、システム LAPACK で代替する
-    find_package(LAPACK REQUIRED)
+    # gdstk/utils.cpp が LAPACK (dgesv_) を直接呼ぶため、システム LAPACK で代替する。
+    # Windows には標準 LAPACK が無いため必須にしない (orcwa 本体は Eigen ソルバで
+    # 動作し、gdstk を使うのはテストバイナリのみ → WITH_RCWA=OFF で回避)
+    if(WIN32)
+        find_package(LAPACK)
+    else()
+        find_package(LAPACK REQUIRED)
+    endif()
     set(MKL_LIBRARIES ${LAPACK_LIBRARIES})
     set(MKL_INCLUDE_DIR "")
 
     # LAPACKE (zgeev/cgeev) があれば、RCWA の固有値計算で
     # Eigen::ComplexEigenSolver より高速な LAPACKE 経由のソルバを使用する
+    # LAPACKE の提供元は 2 通りあり、ヘッダとライブラリを必ず同じ提供元から
+    # 取る (混在するとヘッダの宣言とリンク先の実体がずれる)。
+    #   1. 独立した liblapacke (Linux の liblapacke-dev, Homebrew の lapack)
+    #   2. openblas (vcpkg/Windows)。lapacke.h を include/openblas/ に置き、
+    #      LAPACKE のシンボルは openblas ライブラリ自体が持つ
+    # 呼び出し側が -DLAPACKE_INCLUDE_DIR / -DLAPACKE_LIBRARY を明示している
+    # 場合 (macOS CI) は find_* がキャッシュ値をそのまま使うので影響しない。
     find_path(LAPACKE_INCLUDE_DIR lapacke.h)
     find_library(LAPACKE_LIBRARY NAMES lapacke)
+    if(NOT (LAPACKE_INCLUDE_DIR AND LAPACKE_LIBRARY))
+        unset(LAPACKE_INCLUDE_DIR CACHE)
+        unset(LAPACKE_LIBRARY CACHE)
+        find_path(LAPACKE_INCLUDE_DIR lapacke.h PATH_SUFFIXES openblas)
+        find_library(LAPACKE_LIBRARY NAMES openblas)
+    endif()
     if(LAPACKE_INCLUDE_DIR AND LAPACKE_LIBRARY)
         message(STATUS "LAPACKE が見つかりました: ${LAPACKE_LIBRARY}")
         add_definitions(-DUSE_LAPACKE)
@@ -83,7 +114,12 @@ else()
     endif()
 endif()
 
-find_package(Eigen3 3.3 CONFIG REQUIRED)
+find_package(Eigen3 CONFIG REQUIRED)  # バージョン指定なし: Homebrew の Eigen 5.x も受理する
+# Eigen 5.x の config は旧来の EIGEN3_INCLUDE_DIRS 変数を提供しないため、
+# include_directories() ベースの箇所 (tests/ 等) 向けにターゲットから補完する
+if(NOT EIGEN3_INCLUDE_DIRS)
+    get_target_property(EIGEN3_INCLUDE_DIRS Eigen3::Eigen INTERFACE_INCLUDE_DIRECTORIES)
+endif()
 if (EIGEN3_FOUND)
    message(STATUS "Found Eigen version ${EIGEN3_VERSION_STRING}: ${EIGEN3_INCLUDE_DIRS}")
 endif ()
@@ -420,16 +456,32 @@ else()
         target_link_libraries(orcwa_mpi PRIVATE OpenMP::OpenMP_C Threads::Threads m)
         target_link_libraries(orcwa_mpi PRIVATE MPI::MPI_C hdf5::hdf5)
     else ()
-        add_executable(orcwa ${SOURCES} src/sol_Main.c)
+        # RCWA コア (rcwa/*.cpp) を sol/rcwa_bridge.cpp 経由で orcwa に結線する
+        add_executable(orcwa ${SOURCES} src/sol_Main.c
+            sol/rcwa_bridge.cpp ${RCWA_SRC_FILES})
+        if(MSVC)
+            # MSVC の既定スタック 1MB では FDTD ループが不足する
+            target_link_options(orcwa PRIVATE /STACK:16777216)
+        endif()
+
+        # Eigen 内部の OpenMP 並列 GEMM を無効化する。
+        # macOS (AppleClang + -Xclang -fopenmp + libomp) では並列 GEMM が
+        # 計算結果を壊し、RCWA の回折効率が非決定的に破綻する。
+        # RCWA の行列サイズでは並列化の利得も無い。
+        target_compile_definitions(orcwa PRIVATE EIGEN_DONT_PARALLELIZE)
 
         # Include directories for header files
         target_include_directories(orcwa PUBLIC "${PROJECT_SOURCE_DIR}/include")
 
         # Link OpenMP libraries to the target
+        # (C++ ソースを含むためリンカは CXX、MKL_LIBRARIES は
+        #  MKL 未検出時 LAPACK/LAPACKE を指す)
         if(OpenMP_C_FOUND)
-            target_link_libraries(orcwa PRIVATE OpenMP::OpenMP_C m hdf5::hdf5)
+            target_link_libraries(orcwa PRIVATE OpenMP::OpenMP_C OpenMP::OpenMP_CXX
+                ${MATH_LIB} HDF5::HDF5 ${MKL_LIBRARIES} ${TBB_LIBRARIES})
         else()
-            target_link_libraries(orcwa PRIVATE m hdf5::hdf5)
+            target_link_libraries(orcwa PRIVATE ${MATH_LIB} HDF5::HDF5
+                ${MKL_LIBRARIES} ${TBB_LIBRARIES})
         endif()
     endif()
 endif()
@@ -446,11 +498,14 @@ if (WITH_POST)
     )
 
     add_executable(orcwa_post ${POST_SOURCES} ${POST_SOL_SOURCES} src/post_Main.c)
+    if(MSVC)
+        target_link_options(orcwa_post PRIVATE /STACK:16777216)
+    endif()
 
     # Include directories for header files
     target_include_directories(orcwa_post PUBLIC "${PROJECT_SOURCE_DIR}/include")
 
-    target_link_libraries(orcwa_post PRIVATE OpenMP::OpenMP_C m hdf5::hdf5)
+    target_link_libraries(orcwa_post PRIVATE OpenMP::OpenMP_C ${MATH_LIB} HDF5::HDF5)
 endif()
 
 option(WITH_DATALIB "Build C data-creation library and samples" ON)

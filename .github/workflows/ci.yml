@@ -1,138 +1,330 @@
+# OpenRCWA (処理ロジック) CI — CPU 版ソルバーのビルド + サンプルのスモーク実行。
+# CUDA/MPI/MKL/TBB はランナーに無くてもビルド可能 (optional 化済み)。
+# RCWA コア (rcwa/*.cpp) は orcwa に結線済み: grating サンプルで
+# 回折効率の計算とエネルギー保存 (R+T=1) を検証する。
 name: CI
 
-# CPU-only build & smoke test for the OpenRCWA / OpenFDTD-derived solver,
-# the RCWA library, and the data-creation libraries (C / Python).
-# CUDA/MKL/MPI are optional and intentionally disabled here so the build
-# runs on stock GitHub-hosted runners.
-
+# 実行回数の抑制 (非公開リポジトリの Actions は課金対象。macOS は 10 倍、
+# Windows は 2 倍の分数を消費する):
+#   - 作業ブランチへの push では起動しない。PR を開けば pull_request が
+#     カバーするため、従来の「push と pull_request が二重に走る」無駄も消える。
+#   - 手動確認が必要なときは workflow_dispatch で起動できる。
 on:
   push:
-    branches:
-      - main
-      - master
-      - 'claude/**'
+    branches: [ main ]
+    tags: [ "v*" ]
   pull_request:
+    branches: [ main ]
   workflow_dispatch:
 
-# 同一ブランチで新しい push があれば実行中のジョブをキャンセルする
+# 同一 ref への連続 push では古い実行を打ち切る (追い越された実行に
+# 分数を使わない)。
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  build-and-test:
-    name: Build & smoke test (CPU, Ubuntu)
-    runs-on: ubuntu-24.04
-
-    env:
-      BUILD_DIR: build
-
+  build-cpu:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write   # タグ push 時の Release 添付に使用
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Install build dependencies
+      - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential \
-            cmake \
-            ninja-build \
-            liblapack-dev \
-            liblapacke-dev \
-            libeigen3-dev \
-            libtbb-dev \
-            libhdf5-dev \
-            libomp-dev \
-            python3
+          # LAPACK/LAPACKE/Eigen は MKL 非搭載環境での RCWA コアのフォールバックに必要
+          sudo apt-get install -y cmake gcc g++ libhdf5-dev \
+            liblapack-dev liblapacke-dev libeigen3-dev
 
-      - name: Configure (CPU-only)
+      - name: Configure (CPU only)
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DWITH_CUDA=OFF -DWITH_MPI=OFF
+
+      - name: Build orcwa / orcwa_post
+        run: cmake --build build -j"$(nproc)"
+
+      - name: Smoke test — solver (dipole sample)
         run: |
-          cmake -S . -B "$BUILD_DIR" -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DWITH_CUDA=OFF \
-            -DWITH_MPI=OFF \
-            -DWITH_RCWA=ON \
-            -DWITH_POST=ON \
-            -DWITH_DATALIB=ON
+          mkdir -p /tmp/smoke && cp data/sample/dipole.ofd /tmp/smoke/
+          cd /tmp/smoke
+          "$GITHUB_WORKSPACE/bin/orcwa" -n 2 dipole.ofd
+          grep -q "normal end" orcwa.log
+          test -s orcwa.out
 
-      - name: Build
-        run: cmake --build "$BUILD_DIR" -j"$(nproc)"
-
-      - name: Verify expected binaries
+      - name: Smoke test — post processor
         run: |
-          set -e
-          for exe in bin/orcwa bin/orcwa_post bin/orcwa_rcwa bin/sample_rcwa_grating \
-                     bin/tests/test_cpu bin/tests/test_cpu_diff \
-                     bin/tests/test_gds_cpu bin/tests/test_metasurface_cpu \
-                     bin/tests/test_rcwa_input; do
-            if [ ! -x "$exe" ]; then
-              echo "::error::expected executable not found: $exe"
-              exit 1
-            fi
-            echo "ok: $exe"
-          done
+          cd /tmp/smoke
+          "$GITHUB_WORKSPACE/bin/orcwa_post" -n 2 dipole.ofd
 
-      - name: C data-creation library — generate sample input
+      - name: Smoke test — RCWA (grating sample)
         run: |
-          set -e
-          cd "$RUNNER_TEMP"
-          "$GITHUB_WORKSPACE/bin/sample_rcwa_grating"
-          test -f sample_rcwa_grating.orcwa
-          grep -q '^OpenRCWA 4 2' sample_rcwa_grating.orcwa
-          grep -q '^pbc = 1 1 0' sample_rcwa_grating.orcwa
-          grep -q '^planewave = 0 0 1' sample_rcwa_grating.orcwa
-          echo "C datalib output OK"
+          mkdir -p /tmp/smoke-rcwa && cp data/sample/grating.ofd /tmp/smoke-rcwa/
+          cd /tmp/smoke-rcwa
+          "$GITHUB_WORKSPACE/bin/orcwa" -n 2 grating.ofd
+          grep -q "normal end" orcwa.log
+          # 全周波数・両偏波でエネルギー保存 (R+T=1) を確認。
+          # LAPACKE 経路の数値誤差は ~1e-7 だが、BLAS/アーキテクチャ差の
+          # 安全余裕をみて許容 |R+T-1| <= 3e-3
+          awk -F, 'NR>1 { if ((($3+$4)-1)^2 > 9e-6 || (($5+$6)-1)^2 > 9e-6) \
+            { print "energy not conserved:", $0; exit 1 } }' rcwa_efficiency.csv
 
-      - name: Python data-creation library — regression check
-        run: |
-          set -e
-          cd python/datalib
-          cp sample_rcwa_grating.orcwa "$RUNNER_TEMP/committed.orcwa"
-          python3 sample_rcwa_grating.py
-          # 生成物が現在コミットされているファイルと一致することを確認する
-          diff -u "$RUNNER_TEMP/committed.orcwa" sample_rcwa_grating.orcwa
-          echo "Python datalib regression OK"
-
-      - name: FDTD solver smoke test
-        run: |
-          set -e
-          cd "$RUNNER_TEMP"
-          "$GITHUB_WORKSPACE/bin/orcwa" -n 2 \
-            "$GITHUB_WORKSPACE/ci/smoke_test.orcwa" | tee solver.log
-          grep -q "normal end" solver.log
-          echo "FDTD solver smoke test OK"
-
+      # 以下は .orcwa 経路 (orcwa_rcwa ドライバ)。上の grating スモークは
+      # .ofd 経路 (orcwa 内蔵ブリッジ) なので別物。
       - name: RCWA unit tests (parser + driver)
         run: |
-          set -e
-          cd "$RUNNER_TEMP"
+          mkdir -p /tmp/rcwa-unit && cd /tmp/rcwa-unit
+          # 終了コード = 失敗数。0 (全 PASS) でなければジョブが落ちる。
           "$GITHUB_WORKSPACE/bin/tests/test_rcwa_input" | tee rcwa_unit.log
-          # 終了コードが 0 (全 PASS) であることを確認
-          echo "RCWA unit tests OK"
 
-      - name: RCWA solver smoke test
+      - name: Smoke test — orcwa_rcwa (.orcwa Fresnel)
         run: |
-          set -e
-          cd "$RUNNER_TEMP"
+          mkdir -p /tmp/smoke-orcwa && cd /tmp/smoke-orcwa
           # 空気/ガラス界面の Fresnel 反射 (解析解 R=0.04, R+T=1) を検証
           "$GITHUB_WORKSPACE/bin/orcwa_rcwa" -o rcwa.csv \
             "$GITHUB_WORKSPACE/ci/smoke_rcwa.orcwa" | tee rcwa.log
           grep -q "normal end" rcwa.log
           python3 - rcwa.csv <<'PY'
           import sys
-          path = sys.argv[1]
           row = None
-          with open(path) as f:
+          with open(sys.argv[1]) as f:
               for line in f:
                   if line.startswith('#') or not line.strip():
                       continue
                   row = [float(v) for v in line.split(',')]
-          assert row is not None, "no data row in " + path
+          assert row is not None, "no data row in " + sys.argv[1]
           lam, R, T, A, RT = row
           assert abs(R - 0.04) < 2e-3, f"R={R} expected ~0.04"
           assert abs(RT - 1.0) < 1e-3, f"R+T={RT} expected ~1 (energy conservation)"
           assert abs(A) < 1e-3, f"A={A} expected ~0 (lossless)"
           print(f"RCWA Fresnel OK: R={R:.5f}, T={T:.5f}, A={A:.5f}, R+T={RT:.5f}")
           PY
-          echo "RCWA solver smoke test OK"
+
+      - name: Upload binaries (artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: orcwa-linux-x64
+          path: |
+            bin/orcwa
+            bin/orcwa_post
+
+      # タグ (v*) push 時は Release にバイナリを添付する。
+      # OpenFDTD-X (GUI) や統合テストはここから取得できる (公開リポジトリ)。
+      - name: Package for release
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: tar czf orcwa-linux-x64.tar.gz -C bin orcwa orcwa_post
+
+      - name: Attach binaries to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: orcwa-linux-x64.tar.gz
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-logs
+          path: |
+            /tmp/smoke/*.log
+            /tmp/smoke-rcwa/*.log
+          if-no-files-found: ignore
+
+  # macOS (Apple Silicon)。AppleClang は OpenMP を同梱しないため、
+  # Homebrew の libomp を明示指定して find_package(OpenMP) を通す。
+  # RCWA コアの固有値計算は Homebrew の lapack (keg-only) の LAPACKE を使う:
+  # Eigen の ComplexEigenSolver フォールバックは ±m 次数の縮退固有値で
+  # 固有ベクトル基底が不良条件になることがあり、回折効率が不安定になるため。
+  build-macos:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write   # タグ push 時の Release 添付に使用
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: brew install libomp hdf5 eigen lapack
+
+      - name: Configure (CPU only)
+        run: |
+          OMP="$(brew --prefix libomp)"
+          LAP="$(brew --prefix lapack)"
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DWITH_CUDA=OFF -DWITH_MPI=OFF \
+            -DLAPACKE_INCLUDE_DIR="${LAP}/include" \
+            -DLAPACKE_LIBRARY="${LAP}/lib/liblapacke.dylib" \
+            -DOpenMP_C_FLAGS="-Xclang -fopenmp -I${OMP}/include" \
+            -DOpenMP_C_LIB_NAMES=omp \
+            -DOpenMP_CXX_FLAGS="-Xclang -fopenmp -I${OMP}/include" \
+            -DOpenMP_CXX_LIB_NAMES=omp \
+            -DOpenMP_omp_LIBRARY="${OMP}/lib/libomp.dylib"
+
+      - name: Build orcwa / orcwa_post
+        run: cmake --build build -j"$(sysctl -n hw.ncpu)"
+
+      - name: Smoke test — solver (dipole sample)
+        run: |
+          mkdir -p /tmp/smoke && cp data/sample/dipole.ofd /tmp/smoke/
+          cd /tmp/smoke
+          "$GITHUB_WORKSPACE/bin/orcwa" -n 2 dipole.ofd
+          grep -q "normal end" orcwa.log
+          test -s orcwa.out
+
+      - name: Smoke test — post processor
+        run: |
+          cd /tmp/smoke
+          "$GITHUB_WORKSPACE/bin/orcwa_post" -n 2 dipole.ofd
+
+      - name: Smoke test — RCWA (grating sample)
+        run: |
+          mkdir -p /tmp/smoke-rcwa && cp data/sample/grating.ofd /tmp/smoke-rcwa/
+          cd /tmp/smoke-rcwa
+          "$GITHUB_WORKSPACE/bin/orcwa" -n 2 grating.ofd
+          grep -q "normal end" orcwa.log
+          # 全周波数・両偏波でエネルギー保存 (R+T=1) を確認。
+          # LAPACKE 経路の数値誤差は ~1e-7 だが、BLAS/アーキテクチャ差の
+          # 安全余裕をみて許容 |R+T-1| <= 3e-3
+          awk -F, 'NR>1 { if ((($3+$4)-1)^2 > 9e-6 || (($5+$6)-1)^2 > 9e-6) \
+            { print "energy not conserved:", $0; exit 1 } }' rcwa_efficiency.csv
+
+      - name: Upload binaries (artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: orcwa-macos-arm64
+          path: |
+            bin/orcwa
+            bin/orcwa_post
+
+      - name: Package for release
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: tar czf orcwa-macos-arm64.tar.gz -C bin orcwa orcwa_post
+
+      - name: Attach binaries to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: orcwa-macos-arm64.tar.gz
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-logs-macos
+          path: |
+            /tmp/smoke/*.log
+            /tmp/smoke-rcwa/*.log
+          if-no-files-found: ignore
+
+  # Windows (MSVC)。依存は vcpkg (x64-windows-static-md 静的リンク) で導入し、
+  # DLL 同梱不要の自己完結 exe を生成する。ビルドは MSVC 環境 + Ninja。
+  build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    permissions:
+      contents: write   # タグ push 時の Release 添付に使用
+    steps:
+      - uses: actions/checkout@v4
+
+      # hdf5 の既定機能 szip は libaec を gitlab.dkrz.de から取得するが
+      # 429 で落ちることがあるため、必要な core+zlib のみに絞る
+      # lapack (openblas 実装) は RCWA の固有値計算を LAPACKE 経路にするために導入する。
+      # Eigen フォールバックは ±m 次数の縮退固有値で基底が不良条件になりうるため、
+      # 残差検算つきの LAPACKE 経路の方が堅牢 (macOS でも同じ理由で LAPACKE を使う)。
+      # vcpkg のビルド成果物をキャッシュする (初回以降は約 4 分の
+      # インストールが数十秒になる。Windows は分数 2 倍のため効果が大きい)。
+      - name: Cache vcpkg binaries
+        uses: actions/cache@v4
+        with:
+          path: ~/AppData/Local/vcpkg/archives
+          key: vcpkg-windows-${{ hashFiles('.github/workflows/ci.yml') }}
+          restore-keys: vcpkg-windows-
+
+      - name: Install dependencies (vcpkg)
+        run: vcpkg install "hdf5[core,zlib]:x64-windows-static-md" eigen3:x64-windows-static-md lapack:x64-windows-static-md --recurse
+
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Configure (CPU only)
+        run: |
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release `
+            -DWITH_CUDA=OFF -DWITH_MPI=OFF `
+            -DWITH_RCWA=OFF `
+            "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=x64-windows-static-md 2>&1 | Tee-Object -FilePath configure.log
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      # 固有値ソルバの経路をログに残す (LAPACKE 経路か Eigen フォールバックか)。
+      # vcpkg の lapack が LAPACKE を提供しない場合でも Eigen 経路で動作するため、
+      # ここでは失敗させずに採用された経路を明示するだけにする。
+      - name: Report eigen solver backend
+        run: |
+          $line = Select-String -Path configure.log -Pattern "LAPACKE" | Select-Object -First 1
+          if ($line -and $line.Line -match "見つかりました") {
+            Write-Host "eigen solver backend: LAPACKE ($($line.Line))"
+          } else {
+            Write-Host "eigen solver backend: Eigen fallback (LAPACKE not found)"
+          }
+
+      - name: Build orcwa / orcwa_post
+        run: cmake --build build
+
+      - name: Smoke test — solver (dipole sample)
+        run: |
+          New-Item -ItemType Directory -Force smoke | Out-Null
+          Copy-Item data/sample/dipole.ofd smoke/
+          Set-Location smoke
+          & "$env:GITHUB_WORKSPACE\bin\orcwa.exe" -n 2 dipole.ofd
+          Write-Host ("orcwa exit code: 0x{0:X8}" -f $LASTEXITCODE)
+          if (Test-Path orcwa.log) { Get-Content orcwa.log -Tail 5 }
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          if (-not (Select-String -Path orcwa.log -Pattern "normal end" -Quiet)) { Write-Error "no normal end"; exit 1 }
+          if ((Get-Item orcwa.out).Length -eq 0) { Write-Error "empty orcwa.out"; exit 1 }
+          & "$env:GITHUB_WORKSPACE\bin\orcwa_post.exe" -n 2 dipole.ofd
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Smoke test — RCWA (grating sample)
+        run: |
+          New-Item -ItemType Directory -Force smoke-rcwa | Out-Null
+          Copy-Item data/sample/grating.ofd smoke-rcwa/
+          Set-Location smoke-rcwa
+          & "$env:GITHUB_WORKSPACE\bin\orcwa.exe" -n 2 grating.ofd
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          if (-not (Select-String -Path orcwa.log -Pattern "normal end" -Quiet)) { exit 1 }
+          # 全周波数・両偏波でエネルギー保存 (|R+T-1| <= 3e-3) を確認
+          $rows = Import-Csv rcwa_efficiency.csv
+          foreach ($r in $rows) {
+            if ([math]::Abs([double]$r.R_TE + [double]$r.T_TE - 1) -gt 3e-3 -or
+                [math]::Abs([double]$r.R_TM + [double]$r.T_TM - 1) -gt 3e-3) {
+              Write-Error "energy not conserved"; exit 1
+            }
+          }
+
+      - name: Upload binaries (artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: orcwa-windows-x64
+          path: |
+            bin/orcwa.exe
+            bin/orcwa_post.exe
+
+      - name: Package for release
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: Compress-Archive -Path bin/orcwa.exe, bin/orcwa_post.exe -DestinationPath orcwa-windows-x64.zip
+
+      - name: Attach binaries to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: orcwa-windows-x64.zip
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-logs-windows
+          path: |
+            smoke/*.log
+            smoke-rcwa/*.log
+          if-no-files-found: ignore

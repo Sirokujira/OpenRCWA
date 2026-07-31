@@ -6,8 +6,15 @@ input data
 
 #include "orcwa.h"
 #include "orcwa_prototype.h"
+#include "orcwa_rcwa.h"
 
 #define MAXTOKEN 1000
+
+/* RCWA モードの入力 (orcwa_rcwa.h) */
+int          NRcwaHarmonics = 0;
+double       RcwaPeriod = 0;
+int          NRcwaLayer = 0;
+rcwalayer_t  *RcwaLayer = NULL;
 
 
 int input_data(FILE *fp)
@@ -69,6 +76,11 @@ int input_data(FILE *fp)
 	NFreq2 = 0;
 
 	Plot3dGeom = 0;
+
+	NRcwaHarmonics = 0;
+	RcwaPeriod = 0;
+	NRcwaLayer = 0;
+	RcwaLayer = NULL;
 
 	// read
 
@@ -446,6 +458,31 @@ int input_data(FILE *fp)
 		else if (!strcmp(strkey, "plot3dgeom")) {
 			Plot3dGeom = atoi(token[2]);
 		}
+		else if (!strcmp(strkey, "rcwa")) {
+			if (ntoken > 3) {
+				NRcwaHarmonics = atoi(token[2]);
+				RcwaPeriod = atof(token[3]);
+			}
+			else {
+				printf(errfmt2, strkey);
+				return 1;
+			}
+		}
+		else if (!strcmp(strkey, "rcwalayer")) {
+			if (ntoken > 5) {
+				RcwaLayer = (rcwalayer_t *)realloc(RcwaLayer,
+					(NRcwaLayer + 1) * sizeof(rcwalayer_t));
+				RcwaLayer[NRcwaLayer].eps1 = atof(token[2]);
+				RcwaLayer[NRcwaLayer].eps2 = atof(token[3]);
+				RcwaLayer[NRcwaLayer].fill = atof(token[4]);
+				RcwaLayer[NRcwaLayer].thickness = atof(token[5]);
+				NRcwaLayer++;
+			}
+			else {
+				printf(errfmt3, strkey, NRcwaLayer + 1);
+				return 1;
+			}
+		}
 	}
 /*
 	// debug
@@ -462,6 +499,35 @@ int input_data(FILE *fp)
 	//printf("%d %d %e %e\n", iABC, cPML.l, cPML.m, cPML.r0);
 	//printf("solver = %d %d %e\n", Solver.maxiter, Solver.nout, Solver.converg);
 */
+	// RCWA モード: 層スタックの検証のみ行い、FDTD 用のメッシュ/給電の
+	// チェックとセットアップはスキップする (sol_Main.c が rcwa_run() へ分岐)
+	if (NRcwaLayer > 0) {
+		if (NRcwaLayer < 2) {
+			printf("%s\n", "*** rcwa needs at least 2 rcwalayer (incident/exit)");
+			return 1;
+		}
+		if ((NRcwaHarmonics < 0) || (RcwaPeriod <= 0)) {
+			printf("%s\n", "*** invalid rcwa data");
+			return 1;
+		}
+		if (NFreq1 <= 0) {
+			printf("%s\n", "*** rcwa needs frequency1 data");
+			return 1;
+		}
+		for (int n = 0; n < NRcwaLayer; n++) {
+			if ((RcwaLayer[n].eps1 <= 0) || (RcwaLayer[n].eps2 <= 0) ||
+			    (RcwaLayer[n].fill <= 0) || (RcwaLayer[n].fill >= 1)) {
+				printf("*** invalid rcwalayer data #%d\n", n + 1);
+				return 1;
+			}
+			if ((n > 0) && (n < NRcwaLayer - 1) && (RcwaLayer[n].thickness <= 0)) {
+				printf("*** invalid rcwalayer thickness #%d\n", n + 1);
+				return 1;
+			}
+		}
+		return 0;
+	}
+
 	// error check
 
 	if (nxr <= 0) {

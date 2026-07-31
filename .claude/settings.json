@@ -1,19 +1,31 @@
 {
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
   "permissions": {
     "allow": [
-      "Bash(cmake -S . -B build:*)",
-      "Bash(cmake --build build:*)",
-      "Bash(./bin/tests/test_rcwa_input:*)",
-      "Bash(./bin/orcwa_rcwa:*)",
-      "Bash(git status)",
+      "Bash(cmake:*)",
+      "Bash(make:*)",
+      "Bash(ninja:*)",
+      "Bash(git status:*)",
       "Bash(git diff:*)",
       "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(grep:*)",
+      "Bash(rg:*)",
+      "Bash(ls:*)",
+      "Bash(./bin/orcwa:*)",
+      "Bash(./bin/orcwa_post:*)",
+      "Bash(./bin/orcwa_rcwa:*)",
+      "Bash(./bin/tests/test_rcwa_input:*)",
       "Read(rcwa/**)",
       "Read(tests/**)",
       "Read(src/**)",
       "Read(core/**)",
       "Read(ci/**)"
     ],
-    "deny": []
-  }
+    "deny": [
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)"
+    ]
+  },
+  "includeCoAuthoredBy": true
 }
