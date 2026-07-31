@@ -27,6 +27,12 @@ paths:
   - `Hz = (i/k0²)(kx·Ey − ky·Ex)` (Faraday 則, μ=1)
   - `Ez = i·[[ε]]⁻¹(kx·Hy − ky·Hx)` ([[ε]] = ContinuousXY 畳み込み行列)
 
+- **μ は P/Q に ε と対称に入る**:
+  `P = [[Kx εzz⁻¹Ky, k0²μyy − Kx εzz⁻¹Kx], [Ky εzz⁻¹Ky − k0²μxx, −Ky εzz⁻¹Kx]]`,
+  `Q` は ε↔μ を入れ替えた形 (全体の符号が反転)。半無限媒質は `k² = k0²εμ`、
+  透過率の規格化には `μ_ref/μ_trn` が要る (S_z ∝ kz/μ)。
+  `Layer::isMagnetic_` が false なら追加の Fourier 変換と SVD を省く高速経路。
+
 ## 構造上の前提
 
 - 層スタックは「最上段 = 入射側半無限」「最下段 = 透過側半無限」。

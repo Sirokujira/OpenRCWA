@@ -64,6 +64,8 @@ cmake --build build --target orcwa_rcwa test_rcwa_input -j$(nproc)
 - **RCWA は周期境界のみ**: `pbc=0` は警告の上で無視される。
 - **偏波指定**: `planewave = θ φ pol [psi]` — pol は 1=TM(p), 2=TE(s),
   3=psi[deg] の直線偏波 (0=TM, 90=TE), 4=右円偏波, 5=左円偏波。
+- **磁性材料**: `material = type epsr esgm amur msgm` の amur/msgm が効く。
+  `material_mu = m mur [mui]` でも直接指定できる。μ=1 の問題は高速経路を通る。
 - **多極分散**: `material_dispersion` を同じ材料に複数行書くと極が**加算**される
   (`eps = einf + Σ_p ae_p²/(ce_p²−ω²−i·be_p·ω)`)。導電率項とも加算される。
 

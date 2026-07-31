@@ -143,9 +143,15 @@ bool parseRCWAInput(const std::string& path, RCWAProblem& prob, std::string& err
     prob.materialEps.clear();
     prob.materialEps.push_back(scalex(1.0, 0.0));      // 0: 空気
     prob.materialEps.push_back(scalex(1.0, 1.0e8));    // 1: PEC (近似; exp(-iωt) 規約で損失は正虚部)
+    prob.materialMu.clear();
+    prob.materialMu.push_back(scalex(1.0, 0.0));  // 0: 空気
+    prob.materialMu.push_back(scalex(1.0, 0.0));  // 1: PEC
     prob.materialSigma.clear();
     prob.materialSigma.push_back(0.0);  // 0: 空気
     prob.materialSigma.push_back(0.0);  // 1: PEC
+    prob.materialMagSigma.clear();
+    prob.materialMagSigma.push_back(0.0);  // 0: 空気
+    prob.materialMagSigma.push_back(0.0);  // 1: PEC
     prob.materialDispersion.clear();
     prob.materialDispersion.emplace_back();  // 0: 空気 (非分散)
     prob.materialDispersion.emplace_back();  // 1: PEC  (非分散)
@@ -215,8 +221,14 @@ bool parseRCWAInput(const std::string& path, RCWAProblem& prob, std::string& err
                 if (nv >= 2) {
                     scalar epsr = toScalar(V(1));
                     scalar esgm = (nv >= 3) ? toScalar(V(2)) : 0.0;
+                    // amur = 比透磁率, msgm = 磁気導電率 [Ω/m]。
+                    // 磁気導電率は損失として μ の虚部に入る (exp(-iωt) 規約で正)。
+                    scalar amur = (nv >= 4) ? toScalar(V(3)) : 1.0;
+                    scalar msgm = (nv >= 5) ? toScalar(V(4)) : 0.0;
                     prob.materialEps.push_back(scalex(epsr, 0.0));
+                    prob.materialMu.push_back(scalex(amur, 0.0));
                     prob.materialSigma.push_back(esgm);
+                    prob.materialMagSigma.push_back(msgm);
                     prob.materialDispersion.emplace_back();  // 非分散として初期化
                 }
             }
@@ -235,6 +247,21 @@ bool parseRCWAInput(const std::string& path, RCWAProblem& prob, std::string& err
                             : scalex(a, b);
                     } else {
                         std::cerr << "*** 警告: " << key << " の材料番号 " << m
+                                  << " は未定義です (無視します)\n";
+                    }
+                }
+            }
+            else if (key == "material_mu") {
+                // RCWA 拡張: 材料 m の複素比透磁率を直接指定する。
+                //   material_mu = m mur [mui]
+                if (nv >= 2) {
+                    int m = toInt(V(0));
+                    if (m >= 0 && m < static_cast<int>(prob.materialMu.size())) {
+                        scalar a = toScalar(V(1));
+                        scalar b = (nv >= 3) ? toScalar(V(2)) : 0.0;
+                        prob.materialMu[m] = scalex(a, b);
+                    } else {
+                        std::cerr << "*** 警告: material_mu の材料番号 " << m
                                   << " は未定義です (無視します)\n";
                     }
                 }
@@ -423,44 +450,4 @@ std::vector<scalar> deriveZEdges(const RCWAProblem& prob)
         }
     }
     return std::vector<scalar>(edges.begin(), edges.end());
-}
-
-void sampleCrossSection1D(
-    const RCWAProblem& prob,
-    scalar zCenter,
-    std::vector<scalar>& coordX,
-    std::vector<scalex>& eps)
-{
-    // この z スラブと交差する直方体の x エッジを集めてブレークポイントを作る
-    std::set<scalar> xs;
-    xs.insert(prob.xmin);
-    xs.insert(prob.xmax);
-    for (const auto& b : prob.boxes) {
-        if (zCenter < b.z0 || zCenter > b.z1) continue;
-        scalar bx0 = std::max(b.x0, prob.xmin);
-        scalar bx1 = std::min(b.x1, prob.xmax);
-        if (bx0 < bx1) {
-            xs.insert(bx0);
-            xs.insert(bx1);
-        }
-    }
-
-    coordX.assign(xs.begin(), xs.end());
-
-    // 各セル中央で物体の有無を判定し、誘電率を決める (後勝ち)
-    scalar yc = 0.5 * (prob.ymin + prob.ymax);
-    eps.clear();
-    for (size_t i = 0; i + 1 < coordX.size(); ++i) {
-        scalar xc = 0.5 * (coordX[i] + coordX[i + 1]);
-        scalex e  = prob.backgroundEps;
-        for (const auto& b : prob.boxes) {
-            if (b.containsXYZ(xc, yc, zCenter)) {
-                if (b.material >= 0 &&
-                    b.material < static_cast<int>(prob.materialEps.size())) {
-                    e = prob.materialEps[b.material];
-                }
-            }
-        }
-        eps.push_back(e);
-    }
 }

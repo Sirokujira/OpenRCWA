@@ -31,6 +31,45 @@ Layer::Layer(const Eigen::VectorXs& coordX,
 	{
 		std::cerr << "The configuration of permittivity does not match coordinates!\n";
 	}
+
+	// 非磁性 (μr = 1) が既定
+	mu_ = Eigen::MatrixXcs::Ones(eps_.rows(), eps_.cols());
+	isMagnetic_ = false;
+}
+
+Layer::Layer(const Eigen::VectorXs& coordX,
+	const Eigen::VectorXs& coordY,
+	const Eigen::MatrixXcs& eps,
+	const Eigen::MatrixXcs& mu):
+	coordX_(coordX),
+	coordY_(coordY),
+	eps_(eps),
+	mu_(mu),
+	isSolved_(false)
+{
+	nCx_ = coordX.size();
+	nCy_ = coordY.size();
+
+	if (eps.rows() != nCy_ - 1 ||
+		eps.cols() != nCx_ - 1)
+	{
+		std::cerr << "The configuration of permittivity does not match coordinates!\n";
+	}
+	if (mu.rows() != eps.rows() || mu.cols() != eps.cols())
+	{
+		std::cerr << "The configuration of permeability does not match permittivity!\n";
+		mu_ = Eigen::MatrixXcs::Ones(eps_.rows(), eps_.cols());
+	}
+
+	// μ が全セル 1 なら非磁性として扱い、P/Q の高速経路を使う。
+	isMagnetic_ = false;
+	for (int i = 0; i < mu_.rows() && !isMagnetic_; ++i)
+		for (int j = 0; j < mu_.cols(); ++j)
+			if (std::abs(mu_(i, j) - scalex(1.0, 0.0)) > 1e-12)
+			{
+				isMagnetic_ = true;
+				break;
+			}
 }
 
 void Layer::waveEqnCoeff(const Eigen::MatrixXcs& Kx, 
@@ -79,11 +118,31 @@ void Layer::waveEqnCoeff(const Eigen::MatrixXcs& Kx,
 	e33Solver.solve(eps_, nx, ny, ContinuousXY, fe33,
                 &dfe33, para_x, para_y);
   int blockDim = nx * ny;
-	// bt_mu_11, tb_mu_22, inv_mu_33 are all identities
 	//std::clog << "begin to solve linear system with e33...";
 	BDCSVD<MatrixXcs> SVDSolver(fe33, ComputeThinU | ComputeThinV);
 	const MatrixXcs& F1h = SVDSolver.solve(Kx);
 	const MatrixXcs& F2h = SVDSolver.solve(Ky);
+
+	// 透磁率の畳み込み行列。非磁性層 (μ=1) では bt_mu_11 / tb_mu_22 /
+	// inv_mu_33 がすべて単位行列になるので、追加の Fourier 変換と SVD を
+	// 省略できる (既定の高速経路)。
+	MatrixXcs fmu11, fmu22, G1h, G2h;
+	if (isMagnetic_)
+	{
+		FourierSolver2D m11Solver(coordX_, coordY_);
+		m11Solver.solve(mu_, nx, ny, DiscontinuousX, fmu11);
+
+		FourierSolver2D m22Solver(coordX_, coordY_);
+		m22Solver.solve(mu_, nx, ny, DiscontinuousY, fmu22);
+
+		FourierSolver2D m33Solver(coordX_, coordY_);
+		MatrixXcs fmu33;
+		m33Solver.solve(mu_, nx, ny, ContinuousXY, fmu33);
+
+		BDCSVD<MatrixXcs> muSolver(fmu33, ComputeThinU | ComputeThinV);
+		G1h = muSolver.solve(Kx);   // μzz⁻¹ Kx
+		G2h = muSolver.solve(Ky);   // μzz⁻¹ Ky
+	}
 
     // auto t3 = sploosh::now();
 	//std::clog << "done!\n";
@@ -92,12 +151,22 @@ void Layer::waveEqnCoeff(const Eigen::MatrixXcs& Kx,
 	scalar k0 = 2 * Pi / lambda;
 	scalex k02 = scalex(k0 * k0);
 
+	// P = [[ Kx εzz⁻¹ Ky,          k0² μyy − Kx εzz⁻¹ Kx ],
+	//      [ Ky εzz⁻¹ Ky − k0² μxx, −Ky εzz⁻¹ Kx          ]]
 	P.topLeftCorner(blockDim, blockDim) = Kx * F2h;
 	P.topRightCorner(blockDim, blockDim) = - Kx * F1h;
-	P.topRightCorner(blockDim, blockDim).diagonal().array() += k02;
 	P.bottomLeftCorner(blockDim, blockDim) = Ky * F2h;
-	P.bottomLeftCorner(blockDim, blockDim).diagonal().array() -= k02;
 	P.bottomRightCorner(blockDim, blockDim) = -Ky * F1h;
+	if (isMagnetic_)
+	{
+		P.topRightCorner(blockDim, blockDim) += k02 * fmu22;
+		P.bottomLeftCorner(blockDim, blockDim) -= k02 * fmu11;
+	}
+	else
+	{
+		P.topRightCorner(blockDim, blockDim).diagonal().array() += k02;
+		P.bottomLeftCorner(blockDim, blockDim).diagonal().array() -= k02;
+	}
 
     // auto t4 = sploosh::now();
 
@@ -131,11 +200,24 @@ void Layer::waveEqnCoeff(const Eigen::MatrixXcs& Kx,
 
     // auto t5 = sploosh::now();
 
+	// Q = [[ −Kx μzz⁻¹ Ky,          Kx μzz⁻¹ Kx − k0² εyy ],
+	//      [ −Ky μzz⁻¹ Ky + k0² εxx, Ky μzz⁻¹ Kx           ]]
+	// (P と ε↔μ で対称。μ=1 では μzz⁻¹Kx → Kx となり従来式に一致する)
 	Q.resize(2*blockDim, 2*blockDim);
-	Q.topLeftCorner(blockDim, blockDim) = -Kx * Ky;
-	Q.topRightCorner(blockDim, blockDim) = Kx * Kx - k02 * fe22;
-	Q.bottomLeftCorner(blockDim, blockDim) = -Ky * Ky + k02 * fe11;
-	Q.bottomRightCorner(blockDim, blockDim) = Ky * Kx;
+	if (isMagnetic_)
+	{
+		Q.topLeftCorner(blockDim, blockDim) = -Kx * G2h;
+		Q.topRightCorner(blockDim, blockDim) = Kx * G1h - k02 * fe22;
+		Q.bottomLeftCorner(blockDim, blockDim) = -Ky * G2h + k02 * fe11;
+		Q.bottomRightCorner(blockDim, blockDim) = Ky * G1h;
+	}
+	else
+	{
+		Q.topLeftCorner(blockDim, blockDim) = -Kx * Ky;
+		Q.topRightCorner(blockDim, blockDim) = Kx * Kx - k02 * fe22;
+		Q.bottomLeftCorner(blockDim, blockDim) = -Ky * Ky + k02 * fe11;
+		Q.bottomRightCorner(blockDim, blockDim) = Ky * Kx;
+	}
 
     // auto t6 = sploosh::now();
 
@@ -344,6 +426,27 @@ scalex Layer::eps(scalar x, scalar y) const
 	}
 
 	return eps_(ny, nx);
+}
+
+scalex Layer::mu(scalar x, scalar y) const
+{
+	// eps(x, y) と同じセル探索。mu_ は eps_ と同形状。
+	while (x < l0()) x += Lx();
+	while (x > r1()) x -= Lx();
+
+	if (y < b0() || y > u1())
+	{
+		std::cerr << "The coordinate y is out of range!\n";
+		return scalex(.0);
+	}
+
+	int nx = -1, ny = -1;
+	for (int i = 0; i < coordX_.size()-1; ++i)
+		if (x <= coordX_(i+1)) { nx = i; break; }
+	for (int j = 0; j < coordY_.size()-1; ++j)
+		if (y <= coordY_(j+1)) { ny = j; break; }
+
+	return mu_(ny, nx);
 }
 
 

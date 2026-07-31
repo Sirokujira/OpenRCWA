@@ -11,6 +11,8 @@ private:
 	Eigen::VectorXs coordX_;
 	Eigen::VectorXs coordY_;
 	Eigen::MatrixXcs eps_;
+	Eigen::MatrixXcs mu_;      // 透磁率 (既定は全セル 1)
+	bool isMagnetic_ = false;  // mu_ が恒等でない場合のみ true
 
 	int nCx_;
 	int nCy_;
@@ -28,8 +30,20 @@ public:
 		const Eigen::VectorXs& coordY,
 		const Eigen::MatrixXcs& eps);
 
+	// 磁性層 (μr≠1) 用。mu は eps と同じ形状でなければならない。
+	Layer(const Eigen::VectorXs& coordX,
+		const Eigen::VectorXs& coordY,
+		const Eigen::MatrixXcs& eps,
+		const Eigen::MatrixXcs& mu);
+
 	const Eigen::MatrixXcs& eps() const { return eps_; }
 	scalex eps(scalar x, scalar y) const;
+
+	const Eigen::MatrixXcs& mu() const { return mu_; }
+	scalex mu(scalar x, scalar y) const;
+
+	// μ が全セル 1 なら false。false のときは P/Q 行列の高速経路を使う。
+	bool isMagnetic() const { return isMagnetic_; }
 
 	// solve() 時に設定された波長と対応する真空波数 k0 = 2π/λ。
 	scalar lambda() const { return lambda_; }

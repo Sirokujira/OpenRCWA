@@ -58,9 +58,17 @@ struct RCWAProblem
     // 0 = 空気, 1 = PEC, 2 以降がユーザ材料。
     std::vector<scalex> materialEps;
 
+    // 複素比透磁率 μr。materialEps と同サイズ。既定は 1 (非磁性)。
+    // material 行の amur / msgm、または material_mu キーワードで設定する。
+    std::vector<scalex> materialMu;
+
     // 導電率 [S/m]。materialEps と同サイズ。0 なら無損失。
-    // 波長 λ での複素誘電率: eps + i * (-sigma / (omega * eps0))
+    // 波長 λ での複素誘電率: eps + i * (sigma / (omega * eps0))
     std::vector<scalar> materialSigma;
+
+    // 磁気導電率 [Ω/m]。materialEps と同サイズ。0 なら無損失。
+    // 波長 λ での複素透磁率: mu + i * (msigma / (omega * mu0))
+    std::vector<scalar> materialMagSigma;
 
     // Lorentz 分散パラメータ (material_dispersion キーワード)。
     // 同一材料に対して複数行を書くと極が加算される (多極モデル):
@@ -105,11 +113,3 @@ bool parseRCWAInput(const std::string& path, RCWAProblem& prob, std::string& err
 // boxes と zmin/zmax から、z 方向の層境界 (昇順・重複なし) を導出する。
 // 戻り値の隣り合う 2 値が 1 つの層 (z スラブ) を成す。
 std::vector<scalar> deriveZEdges(const RCWAProblem& prob);
-
-// 指定した z スラブ中央における誘電率の x 断面を、ブレークポイント座標 coordX
-// (μm) とセルごとの誘電率 eps (サイズ coordX.size()-1) として返す (1D 格子向け)。
-void sampleCrossSection1D(
-    const RCWAProblem& prob,
-    scalar zCenter,
-    std::vector<scalar>& coordX,
-    std::vector<scalex>& eps);

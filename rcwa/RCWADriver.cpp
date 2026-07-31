@@ -14,6 +14,7 @@ namespace {
 // 光速 [μm/s] と真空誘電率 [F/m] — 複素誘電率の導電率項計算に使用。
 constexpr scalar C0_UM  = 2.99792458e14;   // c [μm/s]
 constexpr scalar EPS0   = 8.854187817e-12; // ε₀ [F/m]
+constexpr scalar MU0    = 1.25663706212e-6; // μ₀ [H/m]
 
 // 曲面形状を階段近似するための面内分割数。
 // 直方体はエッジだけで厳密に表現できるので分割しない。
@@ -123,12 +124,46 @@ scalex epsAt(const RCWAProblem& prob,
     return e;
 }
 
+// 点 (xc, yc, zc) における複素比透磁率。epsAt と同じ形状判定を使う。
+// 磁気導電率 msgm があれば損失として虚部に加える (exp(-iωt) 規約で正)。
+scalex muAt(const RCWAProblem& prob,
+            scalar xc, scalar yc, scalar zc,
+            scalar lambda)
+{
+    scalex m = scalex(1.0, 0.0);   // 背景は非磁性
+    for (const auto& b : prob.boxes) {
+        if (!b.containsXYZ(xc, yc, zc)) continue;
+        int mi = b.material;
+        if (mi < 0 || mi >= static_cast<int>(prob.materialMu.size())) continue;
+        m = prob.materialMu[mi];
+
+        if (mi < static_cast<int>(prob.materialMagSigma.size())) {
+            scalar msig = prob.materialMagSigma[mi];
+            if (msig != 0.0) {
+                scalar omega = 2.0 * Pi * C0_UM / lambda;  // [rad/s]
+                m += scalex(0.0, msig / (omega * MU0));
+            }
+        }
+    }
+    return m;
+}
+
+// この問題に磁性材料が含まれるか (含まれなければ μ 行列を作らず高速経路)。
+bool hasMagneticMaterial(const RCWAProblem& prob)
+{
+    for (const auto& m : prob.materialMu)
+        if (std::abs(m - scalex(1.0, 0.0)) > 1e-12) return true;
+    for (scalar s : prob.materialMagSigma)
+        if (s != 0.0) return true;
+    return false;
+}
+
 // xgrid×ygrid セル格子と z スラブ中央 zc から Layer を生成する。
 // eps 行列は (nCellY 行 × nCellX 列) で Layer が要求する形式。
 Layer makeLayer(const RCWAProblem& prob,
                 const std::vector<scalar>& xgrid,
                 const std::vector<scalar>& ygrid,
-                scalar zc, scalar lambda)
+                scalar zc, scalar lambda, bool magnetic)
 {
     const int nCellX = static_cast<int>(xgrid.size()) - 1;
     const int nCellY = static_cast<int>(ygrid.size()) - 1;
@@ -140,15 +175,20 @@ Layer makeLayer(const RCWAProblem& prob,
     for (size_t j = 0; j < ygrid.size(); ++j) coordY[j] = ygrid[j];
 
     MatrixXcs eps(nCellY, nCellX);
+    MatrixXcs mu(nCellY, nCellX);
     for (int j = 0; j < nCellY; ++j) {
         scalar yc = 0.5 * (ygrid[j] + ygrid[j + 1]);
         for (int i = 0; i < nCellX; ++i) {
             scalar xc = 0.5 * (xgrid[i] + xgrid[i + 1]);
             eps(j, i) = epsAt(prob, xc, yc, zc, lambda);
+            mu(j, i)  = magnetic ? muAt(prob, xc, yc, zc, lambda)
+                                 : scalex(1.0, 0.0);
         }
     }
 
-    return Layer(coordX, coordY, eps);
+    // 非磁性なら μ を渡さない (Layer 側で高速経路が選ばれる)
+    return magnetic ? Layer(coordX, coordY, eps, mu)
+                    : Layer(coordX, coordY, eps);
 }
 
 } // namespace
@@ -176,6 +216,9 @@ std::vector<RCWAResult> runRCWA(const RCWAProblem& prob, std::string& err,
 
     std::vector<scalar> xgrid = buildCommonXGrid(prob);
     std::vector<scalar> ygrid = buildCommonYGrid(prob);
+
+    // 磁性材料が一切なければ μ 行列を作らず、Layer/P/Q の高速経路を通す。
+    const bool magnetic = hasMagneticMaterial(prob);
 
     // 各スラブの中心 z と厚さ (上端から下端の順)
     std::vector<scalar> slabCenter, slabThick;
@@ -242,7 +285,8 @@ std::vector<RCWAResult> runRCWA(const RCWAProblem& prob, std::string& err,
             solver.disablePML();  // 周期境界 (回折格子)
 
             for (int s = 0; s < nSlab; ++s) {
-                Layer layer = makeLayer(prob, xgrid, ygrid, slabCenter[s], lambda);
+                Layer layer = makeLayer(prob, xgrid, ygrid, slabCenter[s],
+                                        lambda, magnetic);
                 solver.addLayer(layer);
             }
 
@@ -258,7 +302,14 @@ std::vector<RCWAResult> runRCWA(const RCWAProblem& prob, std::string& err,
             // 入射媒質の屈折率。複素平方根の実部を用いることで eps<1 (プラズマ等)
             // にも対応する。実部を 1 でクランプしていた旧実装は eps<1 で入射角を
             // 誤り、Bloch 波数がずれていた。
-            const scalar n_inc = std::max(std::sqrt(eps_inc).real(), scalar(1e-6));
+            scalex mu_inc = magnetic
+                ? muAt(prob, 0.5 * (prob.xmin + prob.xmax),
+                       0.5 * (prob.ymin + prob.ymax),
+                       slabCenter[refLayer], lambda)
+                : scalex(1.0, 0.0);
+            // 屈折率は n = sqrt(ε·μ)。磁性入射媒質でも角度が正しくなる。
+            const scalar n_inc =
+                std::max(std::sqrt(eps_inc * mu_inc).real(), scalar(1e-6));
             // 入射半無限媒質が損失を持つと R/T の規格化 (実 kz 前提) が崩れる。
             if (std::abs(eps_inc.imag()) > 1e-6 * std::abs(eps_inc.real())) {
                 static bool warned = false;

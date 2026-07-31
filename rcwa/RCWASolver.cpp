@@ -1818,8 +1818,12 @@ void RCWASolver::scatterPlaneWave(
 	scalex eps_ref = layers_[refLayerType]->eps(.0, .0);
 	scalex eps_trn = layers_[trnLayerType]->eps(.0, .0);
 
-	scalex kref2 = k0 * k0 * eps_ref;
-	scalex ktrn2 = k0 * k0 * eps_trn;
+	// 半無限媒質の波数は k² = k0²·ε·μ (磁性媒質では μ を落とせない)。
+	scalex mu_ref = layers_[refLayerType]->mu(.0, .0);
+	scalex mu_trn = layers_[trnLayerType]->mu(.0, .0);
+
+	scalex kref2 = k0 * k0 * eps_ref * mu_ref;
+	scalex ktrn2 = k0 * k0 * eps_trn * mu_trn;
 
 
 	for (int i = 0; i < nDim; ++i)
@@ -1891,6 +1895,10 @@ void RCWASolver::scatterPlaneWave(
 		std::cerr << "Warning: incident kz is near zero (grazing incidence?)\n";
 		return;
 	}
+	// 磁性媒質では H = (k×E)/(ωμ₀μr) なので、与えられた |E|² に対する
+	// ポインティング束は S_z ∝ kz/μr。反射側は入射側と同じ層なので μ が
+	// 約分されるが、透過側は μ_ref/μ_trn の比が残る。
+	const scalar muRatio = std::abs(mu_ref / mu_trn);
 	REF = (1.0 / Kzinc) * Kzref_r.asDiagonal() * r;
-	TRN = (1.0 / Kzinc) * Kztrn_r.asDiagonal() * t;
+	TRN = (muRatio / Kzinc) * Kztrn_r.asDiagonal() * t;
 }

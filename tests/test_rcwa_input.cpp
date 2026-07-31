@@ -34,6 +34,8 @@
 //   34. 複素誘電率の直接指定 (material_eps / material_index)
 //   35. 未知キーワードの扱い (FDTD 専用は黙殺, 綴り間違いは警告)
 //   36. 誘電率分布の出力 (saveDeviceImage)
+//   37. 磁性材料 μr≠1 (磁性 Fresnel / インピーダンス整合 / ε↔μ 双対性)
+//   38. material_mu キーワードと磁気損失
 // ============================================================
 #include <algorithm>
 #include <cassert>
@@ -1951,6 +1953,195 @@ end
 }
 
 // ============================================================
+// Test 37: 磁性材料 (μr≠1)
+// 磁性媒質の Fresnel 反射率 (入射側 ε1=μ1=1):
+//   k1z = n1·cosθ,  k2z = √(n2² − n1²sin²θ),  n = √(εμ)
+//   TE: r = (μ2·k1z − μ1·k2z)/(μ2·k1z + μ1·k2z)
+//   TM: r = (ε2·k1z − ε1·k2z)/(ε2·k1z + ε1·k2z)
+// μ が P/Q 行列に正しく入っていなければ角度依存が合わない。
+// ============================================================
+static double magneticFresnelR(double thetaDeg,
+                               double e2, double m2, int pol)
+{
+    const double t   = thetaDeg * M_PI / 180.0;
+    const double n2  = std::sqrt(e2 * m2);
+    const double k1z = std::cos(t);
+    const double s   = std::sin(t);
+    const double k2z = std::sqrt(n2 * n2 - s * s);
+    const double r = (pol == 2) ? (m2 * k1z - k2z) / (m2 * k1z + k2z)
+                                : (e2 * k1z - k2z) / (e2 * k1z + k2z);
+    return r * r;
+}
+
+// 半無限の air → (eps, mu) 界面を解いて R を返す。
+static double solveMagneticInterface(double eps, double mu,
+                                     double thetaDeg, int pol,
+                                     const std::string& tag)
+{
+    std::ostringstream os;
+    os << std::setprecision(17);
+    os << "OpenRCWA 4 2\n"
+          "title = magnetic interface\n"
+          "xmesh = -2.5e-07 10 2.5e-07\n"
+          "ymesh = -2.5e-07 10 2.5e-07\n"
+          "zmesh = -5e-07 10 0.0 10 1e-06\n"
+          "material = 1 " << eps << " 0 " << mu << " 0\n"
+          "geometry = 2 1 -2.5e-07 2.5e-07 -2.5e-07 2.5e-07 -5e-07 0\n"
+          "planewave = " << thetaDeg << " 0 " << pol << "\n"
+          "pbc = 1 1 0\n"
+          "rcwaorder = 4 0\n"
+          "wavelength = 0.6\n"
+          "end\n";
+    auto res = solve(tag, os.str());
+    if (res.empty()) { ++g_fails; return -1.0; }
+    CHECK(std::abs(res[0].R + res[0].T - 1.0) < 2e-3,
+          std::string("magnetic energy conservation ") + tag);
+    return res[0].R;
+}
+
+static void test_magnetic_material()
+{
+    static const char* name = "test_magnetic_material";
+    int prev_fails = g_fails;
+
+    // (1) インピーダンス整合 ε=μ=4 → Z=√(μ/ε)=1。法線入射で R=0。
+    //     (n=√(εμ)=4 なので屈折率は 1 でない — μ を無視すると R≈0.36 になる)
+    {
+        double r0 = solveMagneticInterface(4.0, 4.0, 0.0, 1, "mag_matched");
+        std::cout << "  eps=mu=4 normal: R=" << r0 << " (impedance matched)\n";
+        CHECK(r0 >= 0.0 && r0 < 1e-9, "impedance-matched: R=0 at normal incidence");
+    }
+
+    // (2) 角度・偏波スイープを解析解と比較 (ε=μ=4)
+    for (double th : {30.0, 45.0, 60.0}) {
+        for (int pol = 1; pol <= 2; ++pol) {
+            std::string tag = "mag_s" + std::to_string(int(th)) + "_" + std::to_string(pol);
+            double r   = solveMagneticInterface(4.0, 4.0, th, pol, tag);
+            double ref = magneticFresnelR(th, 4.0, 4.0, pol);
+            std::cout << "  eps=mu=4 theta=" << th << (pol == 2 ? " TE" : " TM")
+                      << ": R=" << r << " (analytic " << ref << ")\n";
+            CHECK(std::abs(r - ref) < 2e-3,
+                  std::string("magnetic Fresnel eps=mu theta=") + std::to_string(th));
+        }
+    }
+
+    // (3) 非対称 ε≠μ。ε=μ だと取り違えバグを見逃すので必ず別値で確認する。
+    const double e2 = 2.25, m2 = 3.0;
+    double tm45 = solveMagneticInterface(e2, m2, 45.0, 1, "mag_asym_tm");
+    double te45 = solveMagneticInterface(e2, m2, 45.0, 2, "mag_asym_te");
+    std::cout << "  eps=2.25 mu=3.0 @45: TM=" << tm45
+              << " (analytic " << magneticFresnelR(45, e2, m2, 1) << ")"
+              << " TE=" << te45
+              << " (analytic " << magneticFresnelR(45, e2, m2, 2) << ")\n";
+    CHECK(std::abs(tm45 - magneticFresnelR(45, e2, m2, 1)) < 2e-3, "asymmetric TM");
+    CHECK(std::abs(te45 - magneticFresnelR(45, e2, m2, 2)) < 2e-3, "asymmetric TE");
+    CHECK(std::abs(tm45 - te45) > 1e-2, "eps != mu splits TM and TE");
+
+    // (4) 電磁双対性: ε と μ を入れ替えると TM と TE が入れ替わる。
+    //     ε または μ の一方だけが効いていると成立しない。
+    double swapTM = solveMagneticInterface(m2, e2, 45.0, 1, "mag_swap_tm");
+    std::cout << "  swap(eps<->mu) TM=" << swapTM
+              << "  vs original TE=" << te45 << "\n";
+    CHECK(std::abs(swapTM - te45) < 1e-9, "duality: swapping eps/mu swaps TM and TE");
+
+    if (g_fails == prev_fails) std::cout << "PASS: " << name << "\n";
+    else                       std::cout << "FAIL: " << name << "\n";
+}
+
+// ============================================================
+// Test 38: material_mu キーワードと磁気損失 (msgm)
+//   - material_mu = m mur [mui] が material 行の amur を上書きする
+//   - 磁気導電率 msgm > 0 で吸収が生じる (A > 0)
+//   - μ を指定しなければ従来どおり非磁性 (高速経路)
+// ============================================================
+static void test_material_mu_keyword()
+{
+    static const char* name = "test_material_mu_keyword";
+    int prev_fails = g_fails;
+
+    auto run = [&](const std::string& matLines, const std::string& tag) {
+        std::ostringstream os;
+        os << "OpenRCWA 4 2\n"
+              "title = material_mu\n"
+              "xmesh = -2.5e-07 10 2.5e-07\n"
+              "ymesh = -2.5e-07 10 2.5e-07\n"
+              "zmesh = -5e-07 10 0.0 10 1e-06\n"
+           << matLines <<
+              "geometry = 2 1 -2.5e-07 2.5e-07 -2.5e-07 2.5e-07 -5e-07 0\n"
+              "planewave = 0 0 1\n"
+              "pbc = 1 1 0\n"
+              "rcwaorder = 4 0\n"
+              "wavelength = 0.6\n"
+              "end\n";
+        return solve(tag, os.str());
+    };
+
+    // material_mu が material 行の amur を上書きする → 整合して R=0
+    {
+        auto a = run("material = 1 4.0 0 1.0 0\nmaterial_mu = 2 4.0 0.0\n", "mu_kw");
+        auto b = run("material = 1 4.0 0 4.0 0\n",                          "mu_amur");
+        if (a.empty() || b.empty()) { ++g_fails; }
+        else {
+            std::cout << "  material_mu R=" << a[0].R
+                      << "  amur R=" << b[0].R << "\n";
+            CHECK(std::abs(a[0].R - b[0].R) < 1e-12,
+                  "material_mu equivalent to amur on the material line");
+            CHECK(a[0].R < 1e-9, "both give impedance-matched R=0");
+        }
+    }
+
+    // 磁気損失 (μ の虚部) → 吸収。
+    // 半無限媒質では吸収は界面透過束に現れないため、空気に挟まれた
+    // 有限厚スラブで評価する (test_absorption_lossy と同じ構成)。
+    {
+        auto runSlab = [&](const std::string& matLines, const std::string& tag) {
+            std::ostringstream os;
+            os << "OpenRCWA 4 2\n"
+                  "title = magnetic loss slab\n"
+                  "xmesh = -2.5e-07 10 2.5e-07\n"
+                  "ymesh = -2.5e-07 10 2.5e-07\n"
+                  "zmesh = -1e-06 10 0.0 10 3e-07 10 7e-07\n"
+               << matLines <<
+                  "geometry = 2 1 -2.5e-07 2.5e-07 -2.5e-07 2.5e-07 0 3e-07\n"
+                  "planewave = 0 0 1\n"
+                  "pbc = 1 1 0\n"
+                  "rcwaorder = 4 0\n"
+                  "wavelength = 0.6\n"
+                  "end\n";
+            return solve(tag, os.str());
+        };
+
+        auto lossless = runSlab("material = 1 4.0 0 4.0 0\n", "mu_slab_lossless");
+        auto lossy    = runSlab("material = 1 4.0 0 1.0 0\n"
+                                "material_mu = 2 4.0 0.5\n", "mu_slab_lossy");
+        if (lossless.empty() || lossy.empty()) { ++g_fails; }
+        else {
+            std::cout << "  lossless slab: A=" << lossless[0].A << "\n";
+            std::cout << "  magnetic loss slab (mui=0.5): R=" << lossy[0].R
+                      << " T=" << lossy[0].T << " A=" << lossy[0].A << "\n";
+            CHECK(std::abs(lossless[0].A) < 2e-3, "lossless magnetic slab: A≈0");
+            CHECK(lossy[0].A > 0.05, "imaginary mu absorbs (A > 0.05)");
+            CHECK(lossy[0].R + lossy[0].T < 1.0 - 1e-3, "magnetically lossy: R+T < 1");
+        }
+    }
+
+    // μ 未指定なら非磁性のまま (amur を省略しても既定 1)
+    {
+        auto a = run("material = 1 2.25 0\n",         "mu_absent");
+        auto b = run("material = 1 2.25 0 1.0 0\n",   "mu_unity");
+        if (a.empty() || b.empty()) { ++g_fails; }
+        else {
+            std::cout << "  amur omitted R=" << a[0].R
+                      << "  amur=1 R=" << b[0].R << "\n";
+            CHECK(std::abs(a[0].R - b[0].R) < 1e-12,
+                  "omitting amur equals amur=1 (non-magnetic fast path)");
+        }
+    }
+    if (g_fails == prev_fails) std::cout << "PASS: " << name << "\n";
+    else                       std::cout << "FAIL: " << name << "\n";
+}
+
+// ============================================================
 // main
 // ============================================================
 int main()
@@ -1993,6 +2184,8 @@ int main()
     test_direct_complex_eps();
     test_unknown_keyword_handling();
     test_device_image_output();
+    test_magnetic_material();
+    test_material_mu_keyword();
 
     std::cout << "======================================\n";
     if (g_fails == 0)
