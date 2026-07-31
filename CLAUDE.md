@@ -41,8 +41,10 @@ $OLDPWD/bin/orcwa -n 2 grating.ofd && cat rcwa_efficiency.csv
   Windows に標準 LAPACK が無いため (gdstk はテストバイナリのみが使う)。
   Windows のテストバイナリを有効化するには vcpkg で LAPACK を導入する。
 - Windows の固有値計算は Eigen フォールバック経路 (縮退対策の対角摂動あり)。
-  LAPACKE 経路 (残差検算つき) の方が堅牢なので、vcpkg で LAPACKE を
-  入れられるなら移行が望ましい。
+  **vcpkg での LAPACKE 導入は 2 回試行してどちらも不成立** (2026-07 実測):
+  `lapack` ポートは lapacke.h を提供せず、`lapack-reference` ポートは
+  VS 同梱 flang が LAPACK 3.12.1 の sgedmd.f90 をコンパイルできない
+  (flang のバグ)。vcpkg/LLVM 側の修正が入るまで再挑戦しないこと。
 - macOS は Homebrew lapack (keg-only) の LAPACKE を明示指定
   (Eigen フォールバックは縮退問題があるため LAPACKE を使う)。
 
