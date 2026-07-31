@@ -210,7 +210,7 @@ jobs:
           restore-keys: vcpkg-windows-
 
       - name: Install dependencies (vcpkg)
-        run: vcpkg install "hdf5[core,zlib]:x64-windows-static-md" eigen3:x64-windows-static-md lapack:x64-windows-static-md --recurse
+        run: vcpkg install "hdf5[core,zlib]:x64-windows-static-md" eigen3:x64-windows-static-md lapack-reference:x64-windows-static-md --recurse
 
       - name: Set up MSVC environment
         uses: ilammy/msvc-dev-cmd@v1
