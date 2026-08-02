@@ -827,8 +827,19 @@ static void test_normal_incidence_pol_degeneracy()
         std::cerr << "  FAIL: solve failed\n"; ++g_fails; return;
     }
     double R1 = resTM[0].R, R2 = resTE[0].R;
-    std::cout << "  normal incidence: R_TM=" << R1 << " R_TE=" << R2 << "\n";
-    CHECK(std::abs(R1 - R2) < 1e-10, "R identical for pol=1/2 at normal incidence");
+    std::cout << "  normal incidence: R_TM=" << std::setprecision(12) << R1
+              << " R_TE=" << R2 << " |diff|=" << std::abs(R1 - R2)
+              << std::setprecision(6) << "\n";
+    // 法線入射では TM/TE は厳密に縮退する。ただし Eigen フォールバック経路
+    // (Windows) は ±m 次数の縮退を分離するため対角に scale*1e-11*(i+1) の
+    // 非一様摂動を加える (MKLEigenSolver.hpp)。摂動量が添字に比例するので
+    // x ブロックと y ブロックで大きさが異なり、TM/TE の対称性が
+    // ~1e-11·2N (2N = 全ハーモニクス数の 2 倍) 程度破れる。
+    // LAPACKE 経路 (Linux/macOS) は摂動が無く厳密一致する。
+    // 許容差はこの摂動スケールに合わせる: 1e-8 でも R の有効数字 7 桁が
+    // 一致することを要求しており、偏波の取り違えのような実バグ
+    // (差は O(1e-3) 以上) は確実に捕捉できる。
+    CHECK(std::abs(R1 - R2) < 1e-8, "R identical for pol=1/2 at normal incidence");
     CHECK(std::abs(R1 - 0.04) < 2e-3, "R matches Fresnel 0.04");
     if (g_fails == prev_fails) std::cout << "PASS: " << name << "\n";
     else                       std::cout << "FAIL: " << name << "\n";
