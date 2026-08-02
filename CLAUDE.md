@@ -93,14 +93,19 @@ $OLDPWD/bin/orcwa -n 2 grating.ofd && cat rcwa_efficiency.csv
 
 ## 移植性
 
-- C99 VLA 禁止 (MSVC)。libm は `MATH_LIB` 変数経由。
-- **`WITH_RCWA` が制御するのは `tests/` のテストバイナリだけ**で、orcwa 本体の
-  RCWA コア (`rcwa/*.cpp`) は常にビルドされる。Windows CI は
-  `-DWITH_RCWA=OFF` だが、**grating スモーク (エネルギー保存 |R+T-1| <= 3e-3)
-  は Windows でも実行・合格している** — RCWA は Windows でも動作する。
-  OFF にしているのは `gdstk/utils.cpp` が LAPACK の `dgesv_` を直接呼び、
-  Windows に標準 LAPACK が無いため (gdstk はテストバイナリのみが使う)。
-  Windows のテストバイナリを有効化するには vcpkg で LAPACK を導入する。
+- C99 VLA 禁止 (MSVC)。libm は `MATH_LIB` 変数経由 (MSVC では空)。C++ ランタイムは
+  CMake が自動でリンクするので `stdc++` を明示しない。MSVC は `/bigobj` 必須
+  (Eigen 多用の翻訳単位が C1128 になる)。
+- orcwa 本体の RCWA コア (`rcwa/*.cpp`) は常にビルドされる。テスト側は 2 段階:
+  - `WITH_RCWA` (既定 ON) — `orcwa_rcwa` + `test_rcwa_input`。
+    `rcwa/*.cpp` にしか依存しないので **Windows でもビルド・実行できる**。
+  - `WITH_RCWA_LEGACY_TESTS` (既定 ON、MSVC は OFF) — gdstk/core 依存の旧テスト
+    (`test_gds_cpu` など)。`gdstk/utils.cpp` が LAPACK の `dgesv_` を直接呼び、
+    Windows に標準 LAPACK が無いため OFF。有効化には vcpkg で LAPACK が要る。
+- **テストのテンポラリファイルは `tmpPath()` 経由** (Windows に `/tmp` は無い)。
+- **libc++ でしか出ないコンパイルエラーがある** (Eigen の 1×1 `Product` →
+  `std::complex` 暗黙変換など)。Linux CI で
+  `clang++ -stdlib=libc++ -fsyntax-only` の先行チェックを実行している。
 - Windows の固有値計算は Eigen フォールバック経路 (縮退対策の対角摂動あり)。
   **vcpkg での LAPACKE 導入は 2 回試行してどちらも不成立** (2026-07 実測):
   `lapack` ポートは lapacke.h を提供せず、`lapack-reference` ポートは
@@ -112,8 +117,11 @@ $OLDPWD/bin/orcwa -n 2 grating.ofd && cat rcwa_efficiency.csv
 ## CI
 
 `.github/workflows/ci.yml`: Linux / macOS / Windows。
-Linux ジョブは FDTD スモーク・RCWA grating スモークに加えて
-`test_rcwa_input` (単体) と `orcwa_rcwa` の Fresnel スモークを実行する。
+3 ジョブとも FDTD スモーク・RCWA grating スモークに加えて
+`test_rcwa_input` (単体) と `orcwa_rcwa` の Fresnel スモークを実行する
+(固有値の経路が Linux/macOS = LAPACKE、Windows = Eigen フォールバックと
+異なるため、3 プラットフォームで解析解との一致を確認する意味がある)。
+Linux ジョブはさらに libc++ 構文チェック (macOS 互換性の先行検出) を行う。
 タグ `v*` push で Release にバイナリ添付。
 
 ## Git 運用

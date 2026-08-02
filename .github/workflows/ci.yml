@@ -38,12 +38,31 @@ jobs:
           # LAPACK/LAPACKE/Eigen は MKL 非搭載環境での RCWA コアのフォールバックに必要
           sudo apt-get install -y cmake gcc g++ libhdf5-dev \
             liblapack-dev liblapacke-dev libeigen3-dev
+          # libc++ 固有のコンパイルエラー (macOS で踏む類) を Linux 上で
+          # 先に検出するための構文チェック用
+          sudo apt-get install -y clang libc++-dev libc++abi-dev
 
       - name: Configure (CPU only)
         run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DWITH_CUDA=OFF -DWITH_MPI=OFF
 
       - name: Build orcwa / orcwa_post
         run: cmake --build build -j"$(nproc)"
+
+      # macOS (AppleClang + libc++) でしか出ないコンパイルエラーを Linux で
+      # 先に潰す。実績: Eigen の 1x1 Product → std::complex の暗黙変換は
+      # libstdc++ では通るが libc++ では通らない。
+      # リンクはしないので (-fsyntax-only) LAPACK 等の依存は不要。
+      - name: libc++ compile check (macOS 互換性の先行検出)
+        run: |
+          fail=0
+          for f in rcwa/*.cpp src/rcwa_Main.cpp tests/test_rcwa_input.cpp; do
+            if ! clang++ -std=c++17 -stdlib=libc++ -fsyntax-only \
+                 -I/usr/include/eigen3 -I. "$f"; then
+              echo "libc++ compile check failed: $f"
+              fail=1
+            fi
+          done
+          exit $fail
 
       - name: Smoke test — solver (dipole sample)
         run: |
@@ -129,6 +148,8 @@ jobs:
           path: |
             /tmp/smoke/*.log
             /tmp/smoke-rcwa/*.log
+            /tmp/smoke-orcwa/*.log
+            /tmp/rcwa-unit/*.log
           if-no-files-found: ignore
 
   # macOS (Apple Silicon)。AppleClang は OpenMP を同梱しないため、
@@ -188,6 +209,39 @@ jobs:
           awk -F, 'NR>1 { if ((($3+$4)-1)^2 > 9e-6 || (($5+$6)-1)^2 > 9e-6) \
             { print "energy not conserved:", $0; exit 1 } }' rcwa_efficiency.csv
 
+      # 以下は .orcwa 経路 (orcwa_rcwa ドライバ)。上の grating スモークは
+      # .ofd 経路 (orcwa 内蔵ブリッジ) なので別物。
+      # macOS は LAPACKE 経路で固有値を解くため、Linux (同じく LAPACKE) とは
+      # BLAS 実装が異なる。解析解との一致をここでも確認する。
+      - name: RCWA unit tests (parser + driver)
+        run: |
+          mkdir -p /tmp/rcwa-unit && cd /tmp/rcwa-unit
+          # 終了コード = 失敗数。0 (全 PASS) でなければジョブが落ちる。
+          "$GITHUB_WORKSPACE/bin/tests/test_rcwa_input" | tee rcwa_unit.log
+
+      - name: Smoke test — orcwa_rcwa (.orcwa Fresnel)
+        run: |
+          mkdir -p /tmp/smoke-orcwa && cd /tmp/smoke-orcwa
+          # 空気/ガラス界面の Fresnel 反射 (解析解 R=0.04, R+T=1) を検証
+          "$GITHUB_WORKSPACE/bin/orcwa_rcwa" -o rcwa.csv \
+            "$GITHUB_WORKSPACE/ci/smoke_rcwa.orcwa" | tee rcwa.log
+          grep -q "normal end" rcwa.log
+          python3 - rcwa.csv <<'PY'
+          import sys
+          row = None
+          with open(sys.argv[1]) as f:
+              for line in f:
+                  if line.startswith('#') or not line.strip():
+                      continue
+                  row = [float(v) for v in line.split(',')]
+          assert row is not None, "no data row in " + sys.argv[1]
+          lam, R, T, A, RT = row
+          assert abs(R - 0.04) < 2e-3, f"R={R} expected ~0.04"
+          assert abs(RT - 1.0) < 1e-3, f"R+T={RT} expected ~1 (energy conservation)"
+          assert abs(A) < 1e-3, f"A={A} expected ~0 (lossless)"
+          print(f"RCWA Fresnel OK: R={R:.5f}, T={T:.5f}, A={A:.5f}, R+T={RT:.5f}")
+          PY
+
       - name: Upload binaries (artifact)
         uses: actions/upload-artifact@v4
         with:
@@ -214,6 +268,8 @@ jobs:
           path: |
             /tmp/smoke/*.log
             /tmp/smoke-rcwa/*.log
+            /tmp/smoke-orcwa/*.log
+            /tmp/rcwa-unit/*.log
           if-no-files-found: ignore
 
   # Windows (MSVC)。依存は vcpkg (x64-windows-static-md 静的リンク) で導入し、
@@ -254,7 +310,7 @@ jobs:
         run: |
           cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release `
             -DWITH_CUDA=OFF -DWITH_MPI=OFF `
-            -DWITH_RCWA=OFF `
+            -DWITH_RCWA_LEGACY_TESTS=OFF `
             "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake" `
             -DVCPKG_TARGET_TRIPLET=x64-windows-static-md 2>&1 | Tee-Object -FilePath configure.log
           if ($LASTEXITCODE -ne 0) { exit 1 }
@@ -305,6 +361,44 @@ jobs:
             }
           }
 
+      # 以下は .orcwa 経路 (orcwa_rcwa ドライバ)。上の grating スモークは
+      # .ofd 経路 (orcwa 内蔵ブリッジ) なので別物。
+      # Windows の固有値計算は Eigen フォールバック経路 (縮退対策の対角摂動
+      # あり) を通るため、LAPACKE 経路の Linux/macOS とは別に検証する意味がある。
+      - name: RCWA unit tests (parser + driver)
+        run: |
+          New-Item -ItemType Directory -Force rcwa-unit | Out-Null
+          Set-Location rcwa-unit
+          # 終了コード = 失敗数。0 (全 PASS) でなければジョブが落ちる。
+          & "$env:GITHUB_WORKSPACE\bin\tests\test_rcwa_input.exe" |
+            Tee-Object -FilePath rcwa_unit.log
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "test_rcwa_input failed ($LASTEXITCODE checks)"; exit 1
+          }
+
+      - name: Smoke test — orcwa_rcwa (.orcwa Fresnel)
+        run: |
+          New-Item -ItemType Directory -Force smoke-orcwa | Out-Null
+          Set-Location smoke-orcwa
+          # 空気/ガラス界面の Fresnel 反射 (解析解 R=0.04, R+T=1) を検証
+          & "$env:GITHUB_WORKSPACE\bin\orcwa_rcwa.exe" -o rcwa.csv `
+            "$env:GITHUB_WORKSPACE\ci\smoke_rcwa.orcwa" | Tee-Object -FilePath rcwa.log
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          if (-not (Select-String -Path rcwa.log -Pattern "normal end" -Quiet)) {
+            Write-Error "no normal end"; exit 1
+          }
+          # CSV は "# lambda[um], R, T, A, R+T" のコメント行 + データ行
+          $row = Get-Content rcwa.csv |
+                 Where-Object { $_ -notmatch '^\s*#' -and $_.Trim() -ne '' } |
+                 Select-Object -Last 1
+          if (-not $row) { Write-Error "no data row in rcwa.csv"; exit 1 }
+          $v = $row -split ',' | ForEach-Object { [double]$_ }
+          $R = $v[1]; $T = $v[2]; $A = $v[3]; $RT = $v[4]
+          if ([math]::Abs($R - 0.04) -gt 2e-3) { Write-Error "R=$R expected ~0.04"; exit 1 }
+          if ([math]::Abs($RT - 1.0) -gt 1e-3) { Write-Error "R+T=$RT expected ~1"; exit 1 }
+          if ([math]::Abs($A) -gt 1e-3) { Write-Error "A=$A expected ~0 (lossless)"; exit 1 }
+          Write-Host "RCWA Fresnel OK: R=$R, T=$T, A=$A, R+T=$RT"
+
       - name: Upload binaries (artifact)
         uses: actions/upload-artifact@v4
         with:
@@ -331,4 +425,6 @@ jobs:
           path: |
             smoke/*.log
             smoke-rcwa/*.log
+            smoke-orcwa/*.log
+            rcwa-unit/*.log
           if-no-files-found: ignore

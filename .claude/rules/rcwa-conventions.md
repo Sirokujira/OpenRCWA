@@ -69,3 +69,6 @@ paths:
   `tests/test_rcwa_input.cpp` に追加する。
 - テストは `CHECK` マクロで失敗を数え、`main` の戻り値 = 失敗数。
 - 新キーワードはパース単体テスト + solve までの結合テストの両方を書く。
+- **テンポラリファイルのパスは `tmpPath("name.csv")` を通す**。`/tmp/...` を
+  直接書かないこと (Windows に `/tmp` は無く、`test_rcwa_input` は 3
+  プラットフォームすべての CI で実行される)。

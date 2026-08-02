@@ -25,8 +25,7 @@ if (BUILD_GPU)
       ${MKL_LIBRARIES}
       ${TBB_LIBRARIES}
       ${MAGMA_LIBRARIES}
-      m
-      stdc++
+      ${MATH_LIB}
       cusolver
       cublas
     OUT_DIR
@@ -43,8 +42,7 @@ if (BUILD_GPU)
       ${MKL_LIBRARIES}
       ${TBB_LIBRARIES}
       ${MAGMA_LIBRARIES}
-      m
-      stdc++
+      ${MATH_LIB}
       cusolver
       cublas
     OUT_DIR
@@ -61,8 +59,7 @@ if (BUILD_GPU)
       ${MKL_LIBRARIES}
       ${TBB_LIBRARIES}
       ${MAGMA_LIBRARIES}
-      m
-      stdc++
+      ${MATH_LIB}
       cusolver
       cublas
     OUT_DIR
@@ -79,14 +76,19 @@ if (BUILD_GPU)
       ${MKL_LIBRARIES}
       ${TBB_LIBRARIES}
       ${MAGMA_LIBRARIES}
-      m
-      stdc++
+      ${MATH_LIB}
       cusolver
       cublas
     OUT_DIR
       ${ROOT_TESTS_DIR})
   set_property(TARGET test_gds_gpu PROPERTY CXX_STANDARD 17)
 endif()
+
+# ── 旧世代テスト (gdstk/ + core/ 依存) ───────────────────────────────
+# gdstk/utils.cpp が LAPACK の dgesv_ を直接呼ぶため、標準 LAPACK の無い
+# Windows ではリンクできない。WITH_RCWA_LEGACY_TESTS=OFF で丸ごと除外する。
+# RCWA 本体と test_rcwa_input はこれらに依存しないので影響を受けない。
+if(WITH_RCWA_LEGACY_TESTS)
 
 add_exe(test_gds_cpu
     test_gds_cpu.cpp
@@ -102,8 +104,7 @@ add_exe(test_gds_cpu
   LINK_LIBRARIES
     ${MKL_LIBRARIES}
     ${TBB_LIBRARIES}
-    m
-    stdc++
+    ${MATH_LIB}
   OUT_DIR
     ${ROOT_TESTS_DIR})
 set_property(TARGET test_gds_cpu PROPERTY CXX_STANDARD 17)
@@ -119,8 +120,7 @@ add_exe(test_cpu
   LINK_LIBRARIES
     ${MKL_LIBRARIES}
     ${TBB_LIBRARIES}
-    m
-    stdc++
+    ${MATH_LIB}
   OUT_DIR
     ${ROOT_TESTS_DIR})
 set_property(TARGET test_cpu PROPERTY CXX_STANDARD 17)
@@ -136,8 +136,7 @@ add_exe(test_metasurface_cpu
   LINK_LIBRARIES
     ${MKL_LIBRARIES}
     ${TBB_LIBRARIES}
-    m
-    stdc++
+    ${MATH_LIB}
   OUT_DIR
     ${ROOT_TESTS_DIR})
 set_property(TARGET test_metasurface_cpu PROPERTY CXX_STANDARD 17)
@@ -153,21 +152,22 @@ add_exe(test_cpu_diff
   LINK_LIBRARIES
     ${MKL_LIBRARIES}
     ${TBB_LIBRARIES}
-    m
-    stdc++
+    ${MATH_LIB}
   OUT_DIR
     ${ROOT_TESTS_DIR})
 set_property(TARGET test_cpu_diff PROPERTY CXX_STANDARD 17)
 
-# RCWAInput パーサ + RCWADriver の単体テスト
+endif()  # WITH_RCWA_LEGACY_TESTS
+
+# RCWAInput パーサ + RCWADriver の単体テスト。
+# rcwa/*.cpp のみに依存するため全プラットフォームでビルドできる。
 add_exe(test_rcwa_input
     test_rcwa_input.cpp
     ${RCWA_SRC_FILES}
   LINK_LIBRARIES
     ${MKL_LIBRARIES}
     ${TBB_LIBRARIES}
-    m
-    stdc++
+    ${MATH_LIB}
   OUT_DIR
     ${ROOT_TESTS_DIR})
 set_property(TARGET test_rcwa_input PROPERTY CXX_STANDARD 17)

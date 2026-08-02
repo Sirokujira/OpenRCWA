@@ -26,8 +26,18 @@ cmake --build build -j"$(nproc)"
 ```
 
 生成物は `bin/` (実行ファイル) と `bin/tests/` (テスト) に置かれる。
-`WITH_RCWA` (既定 ON) が制御するのは `tests/` のテストバイナリだけで、
-`rcwa/*.cpp` の RCWA コアは常にビルドされる。
+`rcwa/*.cpp` の RCWA コアは `orcwa` に組み込まれるため常にビルドされる。
+ビルドオプションは 2 段階:
+
+| オプション | 既定 | 制御対象 |
+|---|---|---|
+| `WITH_RCWA` | ON | `orcwa_rcwa` ドライバ + `test_rcwa_input` |
+| `WITH_RCWA_LEGACY_TESTS` | ON (MSVC は OFF) | `test_gds_cpu` / `test_cpu` / `test_metasurface_cpu` / `test_cpu_diff` |
+
+`WITH_RCWA_LEGACY_TESTS` が MSVC で既定 OFF なのは、これらが依存する
+`gdstk/utils.cpp` が LAPACK の `dgesv_` を直接呼び、Windows に標準 LAPACK が
+無いため。**`orcwa_rcwa` と `test_rcwa_input` は `rcwa/*.cpp` にしか依存しない
+ので Windows でもビルド・実行できる** (CI で実行している)。
 
 ## テスト
 
@@ -48,6 +58,9 @@ $OLDPWD/bin/orcwa -n 2 grating.ofd && cat rcwa_efficiency.csv
   `tests/test_rcwa_input.cpp` に追加する。
 - 新キーワードはパース単体テスト + solve までの結合テストの両方を書く。
 - CI は `.github/workflows/ci.yml` (ビルド + スモーク + 単体テスト)。
+  `test_rcwa_input` と `orcwa_rcwa` の Fresnel スモークは **Linux / macOS /
+  Windows の 3 ジョブすべて**で実行する (固有値の経路が Linux/macOS =
+  LAPACKE、Windows = Eigen フォールバックと異なるため)。
 
 ## 実行
 
@@ -130,10 +143,23 @@ $OLDPWD/bin/orcwa -n 2 grating.ofd && cat rcwa_efficiency.csv
   Eigen 経路には対角への非一様微小摂動 (~1e-11·‖A‖)、LAPACKE 経路には
   残差検算 ‖A·V−V·D‖ + Eigen 解き直しが入っている。**削除しない**。
 - `EIGEN_DONT_PARALLELIZE` は OpenMP との競合回避。外さない。
-- C99 VLA 禁止 (MSVC 対応)。libm は `MATH_LIB` 変数経由。
-- Windows CI は `-DWITH_RCWA=OFF` (テストバイナリのみ無効) だが、RCWA 本体は
-  Windows でも動作しスモークに合格している。OFF の理由は `gdstk/utils.cpp` が
-  LAPACK の `dgesv_` を直接呼ぶため。
+- C99 VLA 禁止 (MSVC 対応)。libm は `MATH_LIB` 変数経由 (MSVC では空)。
+  C++ ランタイムは CMake が自動でリンクするので `stdc++` を明示しない。
+- MSVC は `/bigobj` 必須。Eigen のテンプレートを多用する翻訳単位
+  (`rcwa/`, `tests/test_rcwa_input.cpp`) は obj のセクション数が既定上限を
+  超えて C1128 になる。
+- Windows CI は `-DWITH_RCWA_LEGACY_TESTS=OFF` (gdstk/core 依存の旧テストのみ
+  無効)。`orcwa_rcwa` と `test_rcwa_input` は Windows でもビルド・実行される。
+- **テストが作るテンポラリファイルは `tmpPath()` を通す** (`test_rcwa_input.cpp`)。
+  Windows に `/tmp` は無い。`TMPDIR`/`TEMP`/`TMP` を見て `/tmp` にフォールバックする。
+- **libc++ でしか出ないコンパイルエラーがある** (実績: Eigen の 1×1 `Product`
+  → `std::complex` の暗黙変換は libstdc++ では通り libc++ では通らない)。
+  Linux CI に `clang++ -stdlib=libc++ -fsyntax-only` の先行チェックを入れてある。
+  ローカルで再現するには:
+  ```bash
+  sudo apt-get install -y clang libc++-dev libc++abi-dev
+  clang++ -std=c++17 -stdlib=libc++ -fsyntax-only -I/usr/include/eigen3 -I. rcwa/*.cpp
+  ```
 
 ## 落とし穴 (Gotchas)
 
