@@ -72,10 +72,34 @@ static int g_fails = 0;
         }                                                             \
     } while (0)
 
+// テンポラリディレクトリ配下のパスを組み立てる。
+// Windows には /tmp が無いため、環境変数 (TMPDIR/TEMP/TMP) を見てから
+// POSIX の /tmp にフォールバックする。<filesystem> を使わないのは、
+// 古い libstdc++ で -lstdc++fs のリンクが要るのを避けるため。
+static std::string tmpPath(const std::string& name)
+{
+    const char* dir = nullptr;
+    for (const char* var : {"TMPDIR", "TEMP", "TMP"}) {
+        const char* v = std::getenv(var);
+        if (v && *v) { dir = v; break; }
+    }
+    if (!dir) dir = "/tmp";
+
+    std::string base(dir);
+    // 末尾の区切り文字を除去してから付け直す (二重区切りを避ける)
+    while (!base.empty() && (base.back() == '/' || base.back() == '\\'))
+        base.pop_back();
+#ifdef _WIN32
+    return base + "\\" + name;
+#else
+    return base + "/" + name;
+#endif
+}
+
 // .orcwa 内容をテンポラリファイルに書いてパスを返す
 static std::string writeTmp(const std::string& tag, const std::string& content)
 {
-    std::string path = std::string("/tmp/test_rcwa_") + tag + ".orcwa";
+    std::string path = tmpPath("test_rcwa_" + tag + ".orcwa");
     std::ofstream f(path);
     f << content;
     return path;
@@ -618,13 +642,13 @@ static void runFieldCase(double thetaDeg, int pol, double& ezMax, double& hzMax)
         if (std::abs(cInc(i)) > 1e-14)
             inputCoeffs.emplace_back(i, cInc(i));
 
-    solver.saveFieldImage("/tmp/rcwa_ez.csv", sliceXZ, 0.0, Ez, modulation,
+    solver.saveFieldImage(tmpPath("rcwa_ez.csv"), sliceXZ, 0.0, Ez, modulation,
                           inputCoeffs, stack, thick);
-    solver.saveFieldImage("/tmp/rcwa_hz.csv", sliceXZ, 0.0, Hz, modulation,
+    solver.saveFieldImage(tmpPath("rcwa_hz.csv"), sliceXZ, 0.0, Hz, modulation,
                           inputCoeffs, stack, thick);
 
-    ezMax = csvMaxAbs("/tmp/rcwa_ez.csv");
-    hzMax = csvMaxAbs("/tmp/rcwa_hz.csv");
+    ezMax = csvMaxAbs(tmpPath("rcwa_ez.csv"));
+    hzMax = csvMaxAbs(tmpPath("rcwa_hz.csv"));
 }
 
 static void test_longitudinal_fields()
@@ -1141,14 +1165,14 @@ static void test_transverse_fields()
     int prev_fails = g_fails;
 
     // x 偏波 (pol=1): Ex, Hy ≠ 0; Ey, Hx ≈ 0
-    saveUniformFieldCSV(0.0, 1, Ex, modulation, "/tmp/rcwa_t22_ex.csv");
-    saveUniformFieldCSV(0.0, 1, Ey, modulation, "/tmp/rcwa_t22_ey.csv");
-    saveUniformFieldCSV(0.0, 1, Hx, modulation, "/tmp/rcwa_t22_hx.csv");
-    saveUniformFieldCSV(0.0, 1, Hy, modulation, "/tmp/rcwa_t22_hy.csv");
-    double ex = csvMaxAbs("/tmp/rcwa_t22_ex.csv");
-    double ey = csvMaxAbs("/tmp/rcwa_t22_ey.csv");
-    double hx = csvMaxAbs("/tmp/rcwa_t22_hx.csv");
-    double hy = csvMaxAbs("/tmp/rcwa_t22_hy.csv");
+    saveUniformFieldCSV(0.0, 1, Ex, modulation, tmpPath("rcwa_t22_ex.csv"));
+    saveUniformFieldCSV(0.0, 1, Ey, modulation, tmpPath("rcwa_t22_ey.csv"));
+    saveUniformFieldCSV(0.0, 1, Hx, modulation, tmpPath("rcwa_t22_hx.csv"));
+    saveUniformFieldCSV(0.0, 1, Hy, modulation, tmpPath("rcwa_t22_hy.csv"));
+    double ex = csvMaxAbs(tmpPath("rcwa_t22_ex.csv"));
+    double ey = csvMaxAbs(tmpPath("rcwa_t22_ey.csv"));
+    double hx = csvMaxAbs(tmpPath("rcwa_t22_hx.csv"));
+    double hy = csvMaxAbs(tmpPath("rcwa_t22_hy.csv"));
     std::cout << "  x-pol: Ex=" << ex << " Ey=" << ey
               << " Hx=" << hx << " Hy=" << hy << "\n";
     CHECK(ex > 0.5,  "x-pol: Ex excited");
@@ -1157,14 +1181,14 @@ static void test_transverse_fields()
     CHECK(hx >= 0.0 && hx < 1e-6, "x-pol: Hx≈0");
 
     // y 偏波 (pol=2): Ey, Hx ≠ 0; Ex, Hy ≈ 0
-    saveUniformFieldCSV(0.0, 2, Ex, modulation, "/tmp/rcwa_t22_ex2.csv");
-    saveUniformFieldCSV(0.0, 2, Ey, modulation, "/tmp/rcwa_t22_ey2.csv");
-    saveUniformFieldCSV(0.0, 2, Hx, modulation, "/tmp/rcwa_t22_hx2.csv");
-    saveUniformFieldCSV(0.0, 2, Hy, modulation, "/tmp/rcwa_t22_hy2.csv");
-    ex = csvMaxAbs("/tmp/rcwa_t22_ex2.csv");
-    ey = csvMaxAbs("/tmp/rcwa_t22_ey2.csv");
-    hx = csvMaxAbs("/tmp/rcwa_t22_hx2.csv");
-    hy = csvMaxAbs("/tmp/rcwa_t22_hy2.csv");
+    saveUniformFieldCSV(0.0, 2, Ex, modulation, tmpPath("rcwa_t22_ex2.csv"));
+    saveUniformFieldCSV(0.0, 2, Ey, modulation, tmpPath("rcwa_t22_ey2.csv"));
+    saveUniformFieldCSV(0.0, 2, Hx, modulation, tmpPath("rcwa_t22_hx2.csv"));
+    saveUniformFieldCSV(0.0, 2, Hy, modulation, tmpPath("rcwa_t22_hy2.csv"));
+    ex = csvMaxAbs(tmpPath("rcwa_t22_ex2.csv"));
+    ey = csvMaxAbs(tmpPath("rcwa_t22_ey2.csv"));
+    hx = csvMaxAbs(tmpPath("rcwa_t22_hx2.csv"));
+    hy = csvMaxAbs(tmpPath("rcwa_t22_hy2.csv"));
     std::cout << "  y-pol: Ex=" << ex << " Ey=" << ey
               << " Hx=" << hx << " Hy=" << hy << "\n";
     CHECK(ey > 0.5,  "y-pol: Ey excited");
@@ -1186,13 +1210,13 @@ static void test_save_option_consistency()
     static const char* name = "test_save_option_consistency";
     int prev_fails = g_fails;
 
-    saveUniformFieldCSV(30.0, 1, Ex, modulation, "/tmp/rcwa_t23_mod.csv");
-    saveUniformFieldCSV(30.0, 1, Ex, realpart,   "/tmp/rcwa_t23_re.csv");
-    saveUniformFieldCSV(30.0, 1, Ex, imagpart,   "/tmp/rcwa_t23_im.csv");
+    saveUniformFieldCSV(30.0, 1, Ex, modulation, tmpPath("rcwa_t23_mod.csv"));
+    saveUniformFieldCSV(30.0, 1, Ex, realpart,   tmpPath("rcwa_t23_re.csv"));
+    saveUniformFieldCSV(30.0, 1, Ex, imagpart,   tmpPath("rcwa_t23_im.csv"));
 
-    auto mod = csvReadAll("/tmp/rcwa_t23_mod.csv");
-    auto re  = csvReadAll("/tmp/rcwa_t23_re.csv");
-    auto im  = csvReadAll("/tmp/rcwa_t23_im.csv");
+    auto mod = csvReadAll(tmpPath("rcwa_t23_mod.csv"));
+    auto re  = csvReadAll(tmpPath("rcwa_t23_re.csv"));
+    auto im  = csvReadAll(tmpPath("rcwa_t23_im.csv"));
 
     std::cout << "  cells: mod=" << mod.size()
               << " re=" << re.size() << " im=" << im.size() << "\n";
@@ -1335,7 +1359,7 @@ end
     req.slice     = sliceXZ;
     req.coord     = 0.0;
     req.opt       = modulation;
-    req.path      = "/tmp/rcwa_driver_ez.csv";
+    req.path      = tmpPath("rcwa_driver_ez.csv");
 
     auto res = runRCWA(prob, err, &req);
     if (res.empty()) { std::cerr << "  runRCWA error: " << err << "\n"; ++g_fails; return; }
@@ -1366,8 +1390,8 @@ static void test_bloch_envelope_phase()
     const double kx0 = (2.0 * M_PI / lambda) * std::sin(thetaDeg * M_PI / 180.0);
 
     // (1) 法線入射: kx0=0 なので realpart は x 方向に一定
-    saveUniformFieldCSV(0.0, 1, Ex, realpart, "/tmp/rcwa_t26_re0.csv");
-    auto row0 = csvReadRow("/tmp/rcwa_t26_re0.csv", 0);
+    saveUniformFieldCSV(0.0, 1, Ex, realpart, tmpPath("rcwa_t26_re0.csv"));
+    auto row0 = csvReadRow(tmpPath("rcwa_t26_re0.csv"), 0);
     CHECK(!row0.empty(), "normal-incidence CSV readable");
     if (!row0.empty()) {
         double lo = *std::min_element(row0.begin(), row0.end());
@@ -1377,12 +1401,12 @@ static void test_bloch_envelope_phase()
     }
 
     // (2) 斜め入射: realpart が振動する
-    saveUniformFieldCSV(thetaDeg, 1, Ex, realpart, "/tmp/rcwa_t26_re.csv");
-    saveUniformFieldCSV(thetaDeg, 1, Ex, imagpart, "/tmp/rcwa_t26_im.csv");
-    saveUniformFieldCSV(thetaDeg, 1, Ex, modulation, "/tmp/rcwa_t26_mod.csv");
-    auto re = csvReadRow("/tmp/rcwa_t26_re.csv", 0);
-    auto im = csvReadRow("/tmp/rcwa_t26_im.csv", 0);
-    auto md = csvReadRow("/tmp/rcwa_t26_mod.csv", 0);
+    saveUniformFieldCSV(thetaDeg, 1, Ex, realpart, tmpPath("rcwa_t26_re.csv"));
+    saveUniformFieldCSV(thetaDeg, 1, Ex, imagpart, tmpPath("rcwa_t26_im.csv"));
+    saveUniformFieldCSV(thetaDeg, 1, Ex, modulation, tmpPath("rcwa_t26_mod.csv"));
+    auto re = csvReadRow(tmpPath("rcwa_t26_re.csv"), 0);
+    auto im = csvReadRow(tmpPath("rcwa_t26_im.csv"), 0);
+    auto md = csvReadRow(tmpPath("rcwa_t26_mod.csv"), 0);
     CHECK(re.size() > 2 && re.size() == im.size() && re.size() == md.size(),
           "oblique CSV rows same length");
     if (re.size() > 2 && re.size() == im.size() && re.size() == md.size()) {
@@ -1426,9 +1450,9 @@ static void test_slice_yz()
     int prev_fails = g_fails;
 
     // nHy=1 → ny_=3, nHx=4 → nx_=9 (非正方)
-    saveUniformFieldCSV(0.0, 1, Ex, modulation, "/tmp/rcwa_t27_yz.csv", sliceYZ, 1);
-    double mx = csvMaxAbs("/tmp/rcwa_t27_yz.csv");
-    auto row = csvReadRow("/tmp/rcwa_t27_yz.csv", 0);
+    saveUniformFieldCSV(0.0, 1, Ex, modulation, tmpPath("rcwa_t27_yz.csv"), sliceYZ, 1);
+    double mx = csvMaxAbs(tmpPath("rcwa_t27_yz.csv"));
+    auto row = csvReadRow(tmpPath("rcwa_t27_yz.csv"), 0);
     std::cout << "  sliceYZ (nx_=9, ny_=3): max=" << mx
               << " cols=" << row.size() << "\n";
     CHECK(mx > 0.5,   "sliceYZ: Ex nonzero");
@@ -1436,8 +1460,8 @@ static void test_slice_yz()
     CHECK(!row.empty(), "sliceYZ: CSV has data");
 
     // XZ 断面と同じ振幅になるはず (一様層の法線入射なので断面によらない)
-    saveUniformFieldCSV(0.0, 1, Ex, modulation, "/tmp/rcwa_t27_xz.csv", sliceXZ, 1);
-    double mxz = csvMaxAbs("/tmp/rcwa_t27_xz.csv");
+    saveUniformFieldCSV(0.0, 1, Ex, modulation, tmpPath("rcwa_t27_xz.csv"), sliceXZ, 1);
+    double mxz = csvMaxAbs(tmpPath("rcwa_t27_xz.csv"));
     std::cout << "  sliceXZ max=" << mxz << "\n";
     CHECK(std::abs(mx - mxz) < 1e-6, "uniform layer: |Ex| same on YZ and XZ slices");
 
@@ -1717,7 +1741,7 @@ end
         RCWAFieldRequest req;
         req.component = Ez;
         req.slice     = sliceXZ;
-        req.path      = "/tmp/rcwa_t32_should_not_exist.csv";
+        req.path      = tmpPath("rcwa_t32_should_not_exist.csv");
         std::remove(req.path.c_str());
 
         err.clear();
@@ -1931,7 +1955,7 @@ end
     RCWAFieldRequest req;
     req.slice      = sliceXZ;
     req.coord      = 0.0;
-    req.devicePath = "/tmp/rcwa_t36_device.csv";
+    req.devicePath = tmpPath("rcwa_t36_device.csv");
     std::remove(req.devicePath.c_str());
 
     auto res = runRCWA(prob, err, &req);

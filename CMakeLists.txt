@@ -18,7 +18,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # libm は存在しない (MATH_LIB を空にする)。ソースは UTF-8 (日本語コメント)。
 # M_PI 等は _USE_MATH_DEFINES が必要。
 if(MSVC)
-    add_compile_options(/utf-8)
+    # /bigobj: Eigen のテンプレートを多用する翻訳単位 (rcwa/, tests/) は
+    # obj のセクション数が既定上限を超えて C1128 で落ちることがある。
+    add_compile_options(/utf-8 /bigobj)
     add_compile_definitions(_USE_MATH_DEFINES _CRT_SECURE_NO_WARNINGS NOMINMAX)
     set(MATH_LIB "")
 else()
@@ -189,7 +191,17 @@ endif()
 # RCWA ソルバ (rcwa/ core/ gdstk/ gpu/)
 # OpenFDTD 由来の FDTD ソルバとは独立にビルドする
 # ============================================================
-option(WITH_RCWA "Build RCWA solver and tests" ON)
+option(WITH_RCWA "Build RCWA solver driver (orcwa_rcwa) and RCWA unit tests" ON)
+
+# 旧世代テスト (test_gds_cpu / test_cpu / test_metasurface_cpu / test_cpu_diff) は
+# gdstk/ と core/ に依存する。gdstk/utils.cpp は LAPACK の dgesv_ を直接呼ぶため
+# 標準 LAPACK の無い Windows ではリンクできない。RCWA 本体 (rcwa/*.cpp) と
+# test_rcwa_input はこれらに依存しないので、別オプションで切り離す。
+if(MSVC)
+    option(WITH_RCWA_LEGACY_TESTS "Build gdstk/core based legacy RCWA tests" OFF)
+else()
+    option(WITH_RCWA_LEGACY_TESTS "Build gdstk/core based legacy RCWA tests" ON)
+endif()
 
 set(ROOT_SRC_DIR ${CMAKE_SOURCE_DIR})
 set(ROOT_TESTS_DIR ${CMAKE_SOURCE_DIR}/bin/tests)
@@ -222,10 +234,12 @@ if(WITH_RCWA)
         ${CMAKE_SOURCE_DIR}
         ${MKL_INCLUDE_DIR}
         ${EIGEN3_INCLUDE_DIRS})
+    # libm は MATH_LIB 経由 (MSVC では空)。C++ ランタイムは CXX ターゲットに
+    # CMake が自動でリンクするため stdc++ の明示は不要。
     target_link_libraries(orcwa_rcwa PRIVATE
         ${MKL_LIBRARIES}
         ${TBB_LIBRARIES}
-        m stdc++)
+        ${MATH_LIB})
     set_property(TARGET orcwa_rcwa PROPERTY CXX_STANDARD 17)
 endif()
 
