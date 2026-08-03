@@ -41,6 +41,8 @@ jobs:
           # libc++ 固有のコンパイルエラー (macOS で踏む類) を Linux 上で
           # 先に検出するための構文チェック用
           sudo apt-get install -y clang libc++-dev libc++abi-dev
+          # HDF5 出力の構造検証に h5dump を使う
+          sudo apt-get install -y hdf5-tools
 
       - name: Configure (CPU only)
         run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DWITH_CUDA=OFF -DWITH_MPI=OFF
@@ -187,6 +189,28 @@ jobs:
           fi
           grep -q "negative eps imaginary part" gain.log
           echo "  gain-medium rejection OK"
+          # --- HDF5 出力 (GUI 表示用)。CSV と並行して出るのが仕様 ---
+          # .ofd 経路: TE/TM の 2 偏波。
+          # time_series_data.h5 は実行のたびに上書きされるので、点数が
+          # はっきりしている ar_coating (21 周波数) を出し直してから見る。
+          "$GITHUB_WORKSPACE/bin/orcwa" -n 2 ar_coating.ofd > ar2.log 2>&1
+          test -s time_series_data.h5
+          h5dump -n time_series_data.h5 > h5struct.txt
+          grep -q "dataset    /rcwa/spectrum"        h5struct.txt
+          grep -q "dataset    /metadata/solver_mode" h5struct.txt
+          grep -q "dataset    /metadata/pol_labels"  h5struct.txt
+          # solver_mode は FDTD 出力と区別する目印なので値まで確認する
+          h5dump -d /metadata/solver_mode time_series_data.h5 | grep -q "RCWA"
+          # spectrum は [npol][NFreq] の 2 次元
+          h5dump -H -d /rcwa/spectrum time_series_data.h5 | grep -q "( 2, 21 )"
+          echo "  HDF5 (.ofd path) OK"
+          # .orcwa 経路: 単一偏波 → npol=1
+          "$GITHUB_WORKSPACE/bin/orcwa_rcwa" -o orcwa_h5.csv \
+            "$GITHUB_WORKSPACE/data/sample/rcwa_metal_drude.orcwa" > orcwa_h5.log 2>&1
+          test -s orcwa_h5.h5
+          h5dump -H -d /rcwa/spectrum orcwa_h5.h5 | grep -q "( 1, 7 )"
+          h5dump -d /metadata/solver_mode orcwa_h5.h5 | grep -q "RCWA"
+          echo "  HDF5 (.orcwa path) OK"
           # --- 回帰: RCWA 入力に対する orcwa_post は正常終了する ---
           # (RCWA モードは orcwa.out を作らないため、以前は open error で
           #  exit 1 になり、ソルバ後に必ず post を呼ぶ GUI の流れが失敗した)

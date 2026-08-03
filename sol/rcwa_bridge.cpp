@@ -20,6 +20,7 @@ rcwa_efficiency.csv に出力する。
 */
 
 #include "orcwa_rcwa.h"
+#include "rcwa_hdf5.h"
 
 #include "rcwa/RCWASolver.h"
 #include "rcwa/Layer.h"
@@ -31,6 +32,7 @@ rcwa_efficiency.csv に出力する。
 extern "C" {
 extern int    NFreq1;
 extern double *Freq1;
+extern char   Title[];
 extern void   monitor1(FILE *, const char []);
 }
 
@@ -120,6 +122,11 @@ extern "C" int rcwa_run(FILE *fp_log)
 	}
 	fprintf(csv, "frequency[Hz],lambda[m],R_TE,T_TE,R_TM,T_TM\n");
 
+	/* HDF5 出力用に全点を溜める (CSV は従来どおり逐次書き出す)。
+	   レイアウトは [npol][nfreq] の行優先: 先に TE の全周波数、次に TM。 */
+	std::vector<rcwa_spectrum_row_t> spectrum(2 * (size_t)NFreq1);
+	int nwritten = 0;
+
 	int ierr = 0;
 	for (int ifreq = 0; ifreq < NFreq1; ifreq++) {
 		const double freq = Freq1[ifreq];
@@ -158,6 +165,17 @@ extern "C" int rcwa_run(FILE *fp_log)
 		fprintf(csv, "%.8e,%.8e,%.8e,%.8e,%.8e,%.8e\n",
 			freq, lambda, R[0], T[0], R[1], T[1]);
 
+		for (int pol = 0; pol < 2; pol++) {
+			rcwa_spectrum_row_t &row =
+				spectrum[(size_t)pol * (size_t)NFreq1 + (size_t)ifreq];
+			row.frequency = freq;
+			row.lambda    = lambda;
+			row.R = R[pol];
+			row.T = T[pol];
+			row.A = 1.0 - R[pol] - T[pol];
+		}
+		nwritten++;
+
 		sprintf(str, "  f=%.4e[Hz] lambda=%.4e[m] R/T(TE)=%.5f/%.5f R/T(TM)=%.5f/%.5f",
 			freq, lambda, R[0], T[0], R[1], T[1]);
 		monitor1(fp_log, str);
@@ -183,6 +201,31 @@ extern "C" int rcwa_run(FILE *fp_log)
 
 	if (!ierr) {
 		sprintf(str, "output : %s", csvname);
+		monitor1(fp_log, str);
+
+		/* GUI 表示用の HDF5。CSV と並行して出力する (既存の流れは変えない)。
+		   書けなくても計算結果は CSV にあるので致命的にはしない。 */
+		const char h5name[] = "time_series_data.h5";
+		rcwa_meta_t meta;
+		meta.title      = Title;
+		meta.nharmonics = NRcwaHarmonics;
+		meta.period     = RcwaPeriod;
+		meta.nlayer     = NRcwaLayer;
+		meta.theta      = RcwaTheta;
+		meta.phi        = RcwaPhi;
+		const char *pol_labels[2] = { "TE", "TM" };
+		/* 途中で break した場合に備え、実際に埋まった点数だけ詰め直す */
+		if (nwritten < NFreq1) {
+			for (int i = 0; i < nwritten; i++)
+				spectrum[(size_t)nwritten + (size_t)i] =
+					spectrum[(size_t)NFreq1 + (size_t)i];
+		}
+		if (rcwa_write_hdf5(h5name, &meta, spectrum.data(),
+		                    2, nwritten, pol_labels) == 0) {
+			sprintf(str, "output : %s", h5name);
+		} else {
+			sprintf(str, "*** warning : %s write failed (CSV is still valid)", h5name);
+		}
 		monitor1(fp_log, str);
 	}
 

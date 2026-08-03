@@ -103,6 +103,10 @@ $OLDPWD/bin/orcwa -n 2 grating.ofd && cat rcwa_efficiency.csv
   「ポスト処理なし」と表示し**正常終了 (exit 0)** する。ソルバ後に必ず post を
   呼ぶ GUI の流れを壊さないための仕様なので、エラーに戻さないこと。
 - サンプル入力は `data/sample/` (解析解つき)。一覧は `AGENTS.md` を参照。
+- **HDF5 (`time_series_data.h5`) は FDTD と RCWA で中身が違う**。GUI は
+  `/metadata/solver_mode` の有無で判別する (RCWA のみ存在)。RCWA は
+  `/rcwa/spectrum` に compound `[npol][NFreq]` = `{frequency, lambda, R, T, A}`
+  を書く。CSV も従来どおり並行出力する。詳細は `AGENTS.md`。
 
 ## 移植性
 

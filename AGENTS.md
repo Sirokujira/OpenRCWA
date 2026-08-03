@@ -113,6 +113,36 @@ N=20 で 0.2068 と約 1% ずれる)。RCWA では誘電率境界で法線 E が
 | `tests/` | 単体テスト (`test_rcwa_input.cpp` が RCWA 系の主テスト) |
 | `ci/`, `data/sample/` | CI 用スモークテスト入力 |
 
+## HDF5 出力 (GUI 表示用)
+
+`time_series_data.h5` は **FDTD と RCWA で中身が違う**。GUI 側は
+`/metadata/solver_mode` の**有無**で判別する (RCWA のときだけ存在し、値は
+`"RCWA"`)。CSV / `orcwa.out` は従来どおり出力されるので、既存の読み込みは
+壊れない。
+
+**FDTD 経路** (`sol/solve.c` が出力):
+
+| パス | 内容 |
+|---|---|
+| `/metadata/` | `Dt`, `VFeed`, `IFeed`, `VPoint`, `Eiter`, `Hiter`, メッシュ (`Xn`/`Xc` 等), `input_impedance`, `s_parameters` ほか |
+| `/data%06d/` | 時間ステップごとの `E`, `H`, `P`, `P_loss`, `Surface` |
+
+**RCWA 経路** (`sol/rcwa_hdf5.c` が出力。`.ofd` / `.orcwa` 共通):
+
+| パス | 内容 |
+|---|---|
+| `/metadata/solver_mode` | `"RCWA"` — FDTD と区別する目印 |
+| `/metadata/npol`, `pol_labels` | 偏波数と名前 (`.ofd` は 2 = TE/TM、`.orcwa` は 1) |
+| `/metadata/NFreq`, `theta`, `phi`, `rcwa_harmonics`, `rcwa_period`, `rcwa_nlayer`, `Title` | 計算条件 |
+| `/rcwa/spectrum` | compound **[npol][NFreq]** = `{frequency[Hz], lambda[m], R, T, A}` |
+
+- **`spectrum` は 2 次元**なので、偏波ごとに 1 本の曲線として素直に読める。
+- **波長は [m]**。`.orcwa` の内部単位は μm だが、書き出し時に m へ揃えてある。
+- HDF5 は CSV より精度が高い (CSV は `%.8e` で丸めている)。
+- 書き出しに失敗しても警告のみで続行する (結果は CSV にあるため)。
+- 出力ファイル名: `.ofd` 経路は `time_series_data.h5`、`.orcwa` 経路は
+  `-o` で指定した CSV の拡張子を `.h5` に置換したもの。
+
 ## 物理規約 (違反すると結果が静かに壊れる)
 
 - **時間規約 exp(−iωt)**: 損失媒質は誘電率の**正**の虚部。負の虚部は利得になる。
