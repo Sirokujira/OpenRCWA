@@ -1,0 +1,31 @@
+OpenRCWA 4 2
+title = RCWA sample 1: air/glass interface (Fresnel, normal incidence)
+#
+# 最も基本的な RCWA 入力。空気とガラス (n=1.5) の平坦な界面を法線入射で解く。
+# 解析解 (Fresnel):
+#   R = ((n1-n2)/(n1+n2))^2 = ((1-1.5)/(1+1.5))^2 = 0.04
+#   T = 1 - R = 0.96   (無損失なので A = 0, R+T = 1)
+# 波長に依存しないので、掃引しても R は 0.04 で一定になる。
+#
+# 実行:
+#   ./bin/orcwa_rcwa -o rcwa.csv data/sample/rcwa_fresnel.orcwa
+#
+# 注意: 座標はメートル指定 (パース時に内部単位の μm へ変換される)。
+# 最上段 (+z 側) が入射側、最下段 (-z 側) が透過側の半無限媒質になる。
+# 両端の層は均質でなければならない。
+xmesh = -2.5e-07 10 2.5e-07
+ymesh = -2.5e-07 10 2.5e-07
+# z 領域は 2 つ: [-0.3, 0] um = ガラス, [0, 0.7] um = 空気 (背景)
+zmesh = -3e-07 10 0.0 10 7e-07
+# material = <type> <epsr> <esgm> <amur> <msgm>  → 材料番号 2 (ガラス)
+material = 1 2.25 0 1 0
+# geometry = <material> <shape> x0 x1 y0 y1 z0 z1   (shape=1: 直方体)
+geometry = 2 1 -2.5e-07 2.5e-07 -2.5e-07 2.5e-07 -3e-07 0
+# planewave = <theta[deg]> <phi[deg]> <pol>   pol: 1=TM(p), 2=TE(s)
+planewave = 0 0 1
+pbc = 1 1 0
+# rcwaorder = <nx> <ny>   平坦な界面なので低次で十分 (ny=0 → 1D)
+rcwaorder = 6 0
+# 可視域を掃引 (lambda = 0.40 - 0.75 um)
+frequency1 = 4.0e14 7.5e14 14
+end

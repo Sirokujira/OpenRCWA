@@ -1,0 +1,28 @@
+OpenRCWA 4 2
+title = RCWA sample: oblique incidence at Brewster angle (.ofd path)
+#
+# GUI (OpenFDTD-X) から開ける .ofd 形式で斜め入射を扱う例。
+#
+# planewave = <theta[deg]> <phi[deg]> <pol>
+#   RCWA モードでは theta / phi のみを使う。**pol は無視される** —
+#   回折効率は常に TE / TM の両方を計算して CSV の 4 列に出力するため。
+#   theta は (-90, 90) の範囲。省略すると法線入射になる。
+#
+# ここでは空気/ガラス (n=1.5) の界面にブリュースター角
+#   theta_B = atan(1.5) = 56.30993247 [deg]
+# で入射している。解析解では TM (p) の反射がゼロになる:
+#   R_TM = 0,  R_TE = 0.147929
+# どちらも無損失なので R+T = 1 が成立する。
+#
+# 実行:
+#   cd data/sample && ../../bin/orcwa -n 4 rcwa_oblique.ofd
+#   → rcwa_efficiency.csv の R_TM 列が ~1e-10 以下、R_TE 列が 0.147929 になる。
+#
+# theta を変えれば任意の角度の Fresnel 反射が得られる。格子層 (eps1 != eps2)
+# と組み合わせれば斜め入射の回折効率も計算できる。
+rcwa = 3 3.0e-7
+rcwalayer = 1.0 1.0 0.5 0
+rcwalayer = 2.25 2.25 0.5 0
+planewave = 56.30993247 0 1
+frequency1 = 5.0e14 5.0e14 0
+end

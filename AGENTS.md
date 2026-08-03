@@ -69,6 +69,34 @@ $OLDPWD/bin/orcwa -n 2 grating.ofd && cat rcwa_efficiency.csv
     [-field Ez -slice xz -scoord 0 -sopt mod] [-device] input.orcwa
 ```
 
+## サンプル入力 (`data/sample/`)
+
+解析解が分かっているものを揃えてある。物理を変更したら**まずこれで確認**する。
+CI (Linux ジョブ) が全件を実行し、エネルギー保存と解析解との一致を検証する。
+
+| ファイル | 経路 | 内容 / 期待値 |
+|---|---|---|
+| `rcwa_fresnel.orcwa` | `orcwa_rcwa` | 空気/ガラス界面。R=0.04 (波長によらず一定) |
+| `rcwa_brewster.orcwa` | `orcwa_rcwa` | ブリュースター角 56.30993° の TM 入射。R≈0 |
+| `rcwa_pillar2d.orcwa` | `orcwa_rcwa` | 2D 正方格子の円柱 (メタサーフェス)。R+T=1 |
+| `rcwa_metal_drude.orcwa` | `orcwa_rcwa` | Drude 金属薄膜。**A>0** (負なら符号規約破れ) |
+| `ar_coating.ofd` | `orcwa` | 1/4 波長 AR コート。設計波長 550nm で R≈0 |
+| `rcwa_oblique.ofd` | `orcwa` | 斜め入射 (ブリュースター角)。R_TM≈0, R_TE=0.147929 |
+| `rcwa_metal.ofd` | `orcwa` | 複素誘電率の金属薄膜。R=0.909420, T=0.084430, A>0 |
+| `grating.ofd` | `orcwa` | 周期格子の波長掃引。全点で R+T=1 |
+| `dipole.ofd` | `orcwa` | FDTD (RCWA ではない) |
+
+**`grating.ofd` の既定 `rcwa = 5` は TM が未収束** (R_TM は N=5 で 0.2048、
+N=20 で 0.2068 と約 1% ずれる)。RCWA では誘電率境界で法線 E が不連続になる
+ぶん TM の収束が遅い。スモークには十分だが、格子で TM の値を物理量として
+使うなら **N=12 以上**にして収束を確認すること。
+
+**RCWA モードの入力に `orcwa_post` は使えない。** `rcwalayer` を含む `.ofd` を
+与えると `orcwa` は RCWA コアに分岐して `rcwa_efficiency.csv` だけを出力し、
+時間領域の `orcwa.out` を作らない。`orcwa_post` は `rcwalayer` を検出したら
+「ポスト処理なし」と表示して**正常終了 (exit 0)** する — ソルバ後に必ず post を
+呼ぶ GUI/スクリプトの流れを壊さないための仕様。エラーにしてはいけない。
+
 ## ディレクトリ構成
 
 | パス | 内容 |
@@ -84,6 +112,54 @@ $OLDPWD/bin/orcwa -n 2 grating.ofd && cat rcwa_efficiency.csv
 | `post/` | ポスト処理 (`orcwa_post`) |
 | `tests/` | 単体テスト (`test_rcwa_input.cpp` が RCWA 系の主テスト) |
 | `ci/`, `data/sample/` | CI 用スモークテスト入力 |
+
+## HDF5 出力 (GUI 表示用)
+
+`time_series_data.h5` は **FDTD と RCWA で中身が違う**。GUI 側は
+`/metadata/solver_mode` の**有無**で判別する (RCWA のときだけ存在し、値は
+`"RCWA"`)。CSV / `orcwa.out` は従来どおり出力されるので、既存の読み込みは
+壊れない。
+
+**FDTD 経路** (`sol/solve.c` が出力):
+
+| パス | 内容 |
+|---|---|
+| `/metadata/` | `Dt`, `VFeed`, `IFeed`, `VPoint`, `Eiter`, `Hiter`, メッシュ (`Xn`/`Xc` 等), `input_impedance`, `s_parameters` ほか |
+| `/data%06d/` | 時間ステップごとの `E`, `H`, `P`, `P_loss`, `Surface` |
+
+**RCWA 経路** (`sol/rcwa_hdf5.c` が出力。`.ofd` / `.orcwa` 共通):
+
+| パス | 内容 |
+|---|---|
+| `/metadata/solver_mode` | `"RCWA"` — FDTD と区別する目印 |
+| `/metadata/npol`, `pol_labels` | 偏波数と名前 (`.ofd` は 2 = TE/TM、`.orcwa` は 1) |
+| `/metadata/NFreq`, `theta`, `phi`, `rcwa_harmonics`, `rcwa_period`, `rcwa_nlayer`, `Title` | 計算条件 |
+| `/rcwa/spectrum` | compound **[npol][NFreq]** = `{frequency[Hz], lambda[m], R, T, A}` |
+
+- **`spectrum` は 2 次元**なので、偏波ごとに 1 本の曲線として素直に読める。
+- **波長は [m]**。`.orcwa` の内部単位は μm だが、書き出し時に m へ揃えてある。
+- HDF5 は CSV より精度が高い (CSV は `%.8e` で丸めている)。
+- 書き出しに失敗しても警告のみで続行する (結果は CSV にあるため)。
+- 出力ファイル名: `.ofd` 経路は `time_series_data.h5`、`.orcwa` 経路は
+  `-o` で指定した CSV の拡張子を `.h5` に置換したもの。
+
+### 出力先のパス (現状仕様 — 変更しないこと)
+
+`.ofd` 経路の出力 (`rcwa_efficiency.csv` / `time_series_data.h5` /
+`orcwa.log`) は**カレントディレクトリ基準の相対パス**で、入力ファイルの
+場所からは導出しない。FDTD 経路の `orcwa.out` も同じ規則なので、両経路で
+挙動は揃っている。
+
+GUI (OpenFDTD-X) は入力ファイルのあるディレクトリへ `cd` してから
+絶対パスで入力を渡すため、結果として出力は入力の隣に出る。
+
+- **`orcwa` の `-out` は RCWA モードでは無視される。** `rcwa_run(fp_log)` が
+  出力先を受け取らず、ファイル名がハードコードされているため
+  (`sol/rcwa_bridge.cpp`)。FDTD では `-out` が `orcwa.out` に効くので、
+  経路によって挙動が違う点に注意。
+- これは既知かつ意図的な現状仕様 (2026-08 時点でユーザー判断により維持)。
+  GUI から出力先を制御する必要が出たときに、`-out` を RCWA にも
+  効かせるかを改めて判断する。
 
 ## 物理規約 (違反すると結果が静かに壊れる)
 
@@ -122,6 +198,31 @@ $OLDPWD/bin/orcwa -n 2 grating.ofd && cat rcwa_efficiency.csv
   平面波励起は必ず `generateHorizontalPlaneWave` で係数化する
   (固有モード添字の直接指定は ±Kx が混ざり平面波にならない)。
 
+## `.ofd` の RCWA モード (GUI 経路) の要点
+
+`.orcwa` と `.ofd` は**別形式**。拡張子を変えても変換されない。GUI
+(OpenFDTD-X) が開けるのは `.ofd` だけで、RCWA として解くには
+`rcwa` / `rcwalayer` キーが要る (`.orcwa` の `geometry` 系は読まれない)。
+
+```
+rcwa      = <N> <period[m]>
+rcwalayer = <eps1r> <eps2r> <fill> <thickness[m]> [<eps1i> <eps2i>]
+planewave = <theta[deg]> <phi[deg]> <pol>
+```
+
+- **誘電率の虚部は省略可** (省略時 0 = 無損失、従来の書式と後方互換)。
+  損失は **正**の虚部 (exp(−iωt))。負は利得なので入力チェックで弾く。
+  金属のように**実部が負**の材料も指定できる。
+- **`planewave` の pol は無視される。** RCWA モードは常に TE/TM 両方を
+  計算して CSV の 4 列に出力する (列構成を固定するため)。使うのは θ/φ のみ。
+  `planewave` 自体を省略すると法線入射。θ は (−90, 90)。
+- 偏波基底と Bloch 波数の決め方は `rcwa/RCWADriver.cpp` と**同一にすること**。
+  正規化 (1/kzinc) と対で決まっており、片方だけ変えると斜め入射で R+T≠1 になる。
+- **`.ofd` 経路は分散 (波長依存) を扱えない**。`rcwalayer` の誘電率は固定値
+  なので、金属など分散の効く材料は設計波長近傍でしか意味を持たない。
+  波長依存が必要なら `.orcwa` の `material_dispersion` + `orcwa_rcwa` を使う。
+- **`.ofd` 経路は 1D・単一周期のみ**。2D 格子は `.orcwa` 経路が必要。
+
 ## `.orcwa` 入力の要点
 
 - **偏波指定**: `planewave = θ φ pol [psi]` — pol は 1=TM(p), 2=TE(s),
@@ -143,6 +244,18 @@ $OLDPWD/bin/orcwa -n 2 grating.ofd && cat rcwa_efficiency.csv
   Eigen 経路には対角への非一様微小摂動 (~1e-11·‖A‖)、LAPACKE 経路には
   残差検算 ‖A·V−V·D‖ + Eigen 解き直しが入っている。**削除しない**。
 - `EIGEN_DONT_PARALLELIZE` は OpenMP との競合回避。外さない。
+- LAPACKE 経路は毎回 ‖A・V−V・D‖∞/‖A‖∞ ≤ 1e-8 を検算し、外れたら Eigen で
+  解き直す。**環境によっては毎回この検算に落ちる** (実測: macOS で
+  `LAPACKE geev unreliable (info=0)` が全ソルブで発生。結果は Eigen 経路で
+  正しく、R+T=1 も成立する)。原因は LAPACK 本体と LAPACKE の提供元の
+  食い違いが疑わしい (macOS の `find_package(LAPACK)` は Accelerate
+  framework を拾う一方、LAPACKE は Homebrew の `liblapacke.dylib` になる)。
+  切り分けには次を見る:
+  ```bash
+  grep -i lapacke build/CMakeCache.txt   # どのヘッダ/ライブラリを選んだか
+  otool -L bin/orcwa | grep -i "lapack\|Accelerate"   # 実際のリンク先
+  ```
+  ログは最初の 1 回だけ相対残差つきで出る (毎ソルブ出すと大量になるため)。
 - C99 VLA 禁止 (MSVC 対応)。libm は `MATH_LIB` 変数経由 (MSVC では空)。
   C++ ランタイムは CMake が自動でリンクするので `stdc++` を明示しない。
 - MSVC は `/bigobj` 必須。Eigen のテンプレートを多用する翻訳単位

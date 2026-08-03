@@ -15,6 +15,8 @@ int          NRcwaHarmonics = 0;
 double       RcwaPeriod = 0;
 int          NRcwaLayer = 0;
 rcwalayer_t  *RcwaLayer = NULL;
+double       RcwaTheta = 0;
+double       RcwaPhi = 0;
 
 
 int input_data(FILE *fp)
@@ -81,6 +83,8 @@ int input_data(FILE *fp)
 	RcwaPeriod = 0;
 	NRcwaLayer = 0;
 	RcwaLayer = NULL;
+	RcwaTheta = 0;
+	RcwaPhi = 0;
 
 	// read
 
@@ -476,6 +480,9 @@ int input_data(FILE *fp)
 				RcwaLayer[NRcwaLayer].eps2 = atof(token[3]);
 				RcwaLayer[NRcwaLayer].fill = atof(token[4]);
 				RcwaLayer[NRcwaLayer].thickness = atof(token[5]);
+				/* 虚部は省略可 (後方互換)。指定時は損失を表す (exp(-iwt) → 正) */
+				RcwaLayer[NRcwaLayer].eps1i = (ntoken > 7) ? atof(token[6]) : 0;
+				RcwaLayer[NRcwaLayer].eps2i = (ntoken > 7) ? atof(token[7]) : 0;
 				NRcwaLayer++;
 			}
 			else {
@@ -514,11 +521,38 @@ int input_data(FILE *fp)
 			printf("%s\n", "*** rcwa needs frequency1 data");
 			return 1;
 		}
+		/* 入射方向は planewave キーから取る (無指定なら法線入射)。
+		   pol は使わない — RCWA モードは常に TE/TM 両方を計算する。 */
+		if (IPlanewave) {
+			RcwaTheta = Planewave.theta;
+			RcwaPhi   = Planewave.phi;
+		}
+		if ((RcwaTheta <= -90.0) || (RcwaTheta >= 90.0)) {
+			printf("%s\n", "*** rcwa planewave theta must be within (-90, 90) deg");
+			return 1;
+		}
 		for (int n = 0; n < NRcwaLayer; n++) {
-			if ((RcwaLayer[n].eps1 <= 0) || (RcwaLayer[n].eps2 <= 0) ||
+			/* 金属は誘電率の実部が負になるため eps>0 は要求できない。
+			   禁止するのは「誘電率が完全にゼロ」と「利得媒質」のみ。
+			   時間規約 exp(-iwt) では損失が正の虚部なので、負の虚部は
+			   利得になり R+T>1 が出る (物理的な入力ミス)。 */
+			if (((RcwaLayer[n].eps1 == 0) && (RcwaLayer[n].eps1i == 0)) ||
+			    ((RcwaLayer[n].eps2 == 0) && (RcwaLayer[n].eps2i == 0)) ||
 			    (RcwaLayer[n].fill <= 0) || (RcwaLayer[n].fill >= 1)) {
 				printf("*** invalid rcwalayer data #%d\n", n + 1);
 				return 1;
+			}
+			if ((RcwaLayer[n].eps1i < 0) || (RcwaLayer[n].eps2i < 0)) {
+				printf("*** rcwalayer #%d has negative eps imaginary part"
+				       " (gain medium; loss must be positive for exp(-iwt))\n", n + 1);
+				return 1;
+			}
+			/* 両端は半無限媒質。R/T の規格化が実 kz を前提にしているため、
+			   ここに損失があると効率の意味が壊れる。 */
+			if (((n == 0) || (n == NRcwaLayer - 1)) &&
+			    ((RcwaLayer[n].eps1i > 0) || (RcwaLayer[n].eps2i > 0))) {
+				printf("*** warning : rcwalayer #%d (semi-infinite) is lossy;"
+				       " R/T normalization assumes lossless outer media\n", n + 1);
 			}
 			if ((n > 0) && (n < NRcwaLayer - 1) && (RcwaLayer[n].thickness <= 0)) {
 				printf("*** invalid rcwalayer thickness #%d\n", n + 1);

@@ -8,11 +8,13 @@
 // ============================================================
 #include "rcwa/RCWAInput.h"
 #include "rcwa/RCWADriver.h"
+#include "rcwa_hdf5.h"
 
 #include <iostream>
 #include <fstream>
 #include <string>
 #include <iomanip>
+#include <vector>
 
 static void usage()
 {
@@ -175,6 +177,59 @@ int main(int argc, char* argv[])
                   << "   R+T = " << (r.R + r.T) << "\n";
     }
     fout.close();
+
+    // GUI 表示用の HDF5 を CSV と並行して出力する (レイアウトは
+    // include/rcwa_hdf5.h)。.orcwa は planewave で偏波を 1 つ選ぶので npol=1。
+    // 書けなくても結果は CSV にあるので致命的にはしない。
+    {
+        std::string h5file = outfile;
+        const std::string::size_type dot = h5file.rfind(".csv");
+        if (dot != std::string::npos && dot == h5file.size() - 4)
+            h5file.replace(dot, 4, ".h5");
+        else
+            h5file += ".h5";
+
+        std::vector<rcwa_spectrum_row_t> rows;
+        rows.reserve(results.size());
+        for (const auto& r : results) {
+            rcwa_spectrum_row_t row;
+            // 内部単位は μm。HDF5 は .ofd 経路と揃えて [m] で書く。
+            const double lambda_m = static_cast<double>(r.lambda) * 1e-6;
+            row.lambda    = lambda_m;
+            row.frequency = (lambda_m > 0) ? (2.99792458e8 / lambda_m) : 0.0;
+            row.R = r.R;
+            row.T = r.T;
+            row.A = r.A;
+            rows.push_back(row);
+        }
+
+        const char* polName = "TM";
+        switch (prob.pol) {
+        case 2:  polName = "TE";   break;
+        case 3:  polName = "LIN";  break;  // psi[deg] の直線偏波
+        case 4:  polName = "RCP";  break;
+        case 5:  polName = "LCP";  break;
+        default: polName = "TM";   break;
+        }
+        const char* pol_labels[1] = { polName };
+
+        rcwa_meta_t meta;
+        meta.title      = prob.title.c_str();
+        meta.nharmonics = prob.nHx;
+        // x 方向の周期 [m] (内部は μm)
+        meta.period     = static_cast<double>(prob.xmax - prob.xmin) * 1e-6;
+        meta.nlayer     = 0;   // .orcwa は zmesh からスラブを組むため層数は不定
+        meta.theta      = prob.theta;
+        meta.phi        = prob.phi;
+
+        if (rcwa_write_hdf5(h5file.c_str(), &meta, rows.data(),
+                            1, static_cast<int>(rows.size()), pol_labels) == 0) {
+            std::cout << "=== output -> " << h5file << " ===\n";
+        } else {
+            std::cerr << "*** 警告: " << h5file
+                      << " の書き出しに失敗しました (CSV は有効です)\n";
+        }
+    }
 
     if (wantField)
         std::cout << "=== field  -> " << fieldReq.path << " ===\n";

@@ -1,0 +1,40 @@
+OpenRCWA 4 2
+title = RCWA sample 4: Drude metal film (dispersive, absorbing)
+#
+# 分散性・損失性材料の例。Drude モデルの金属薄膜 (30 nm) をガラス基板に
+# 載せた構造を法線入射で解く。
+#
+# material_dispersion = <m> <einf> <ae> <be> <ce>   [SI 単位: rad/s]
+#   eps(omega) = einf + Σ_p ae_p^2 / (ce_p^2 - omega^2 - i*be_p*omega)
+# ce=0 とすると Drude モデルになる:
+#   eps = einf - wp^2 / (omega^2 + i*gamma*omega)     (wp=ae, gamma=be)
+# ここでは銀に近い値 wp=1.36e16, gamma=3.0e13 を使っている。
+# 可視域では eps の実部が大きな負になり、金属的な高反射になる。
+#
+# 期待される挙動:
+#   R は 0.9 前後と高く、30 nm と薄いので T もわずかに残る。
+#   吸収 A = 1-R-T が有限の正値になる (損失媒質なので R+T < 1)。
+#   A が負になったら符号規約の破れ (利得媒質) を疑うこと。
+#
+# 時間規約は exp(-iwt) なので、損失は誘電率の「正」の虚部で表される。
+#
+# 実行:
+#   ./bin/orcwa_rcwa -o rcwa.csv data/sample/rcwa_metal_drude.orcwa
+xmesh = -2.5e-07 10 2.5e-07
+ymesh = -2.5e-07 10 2.5e-07
+# z 領域は 3 つ: [-0.5,-0.03]=ガラス基板 / [-0.03,0]=金属膜 / [0,0.5]=空気
+zmesh = -5e-07 10 -3.0e-08 6 0.0 10 5e-07
+# 材料番号 2 = ガラス
+material = 1 2.25 0 1 0
+# 材料番号 3 = 金属 (epsr はダミー。下の material_dispersion で上書きされる)
+material = 1 1.0 0 1 0
+material_dispersion = 3 1.0 1.36e16 3.0e13 0.0
+# ガラス基板 (透過側の半無限層)
+geometry = 2 1 -2.5e-07 2.5e-07 -2.5e-07 2.5e-07 -5e-07 -3.0e-08
+# 金属薄膜
+geometry = 3 1 -2.5e-07 2.5e-07 -2.5e-07 2.5e-07 -3.0e-08 0
+planewave = 0 0 1
+pbc = 1 1 0
+rcwaorder = 6 0
+frequency1 = 4.0e14 7.0e14 6
+end

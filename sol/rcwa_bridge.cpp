@@ -6,14 +6,21 @@ RCWA コア (rcwa/RCWASolver) で解き、frequency1 掃引の回折効率を
 rcwa_efficiency.csv に出力する。
 
 規約 (rcwa/ コアの実装に合わせる):
-  - 垂直入射のみ (generateHorizontalPlaneWave)
+  - 斜め入射に対応 (planewave = theta phi ... の theta/phi を使う)。
+    偏波基底と Bloch 波数の決め方は rcwa/RCWADriver.cpp と同一にすること。
+    **正規化 (1/kzinc) と偏波ベクトルは対で決まっており、片方だけ変えると
+    斜め入射で R+T≠1 になる。**
+  - planewave の pol は使わない。RCWA モードは常に TE/TM 両方を出力する
+    (CSV の列構成を固定するため)。
   - Layer::gamma() は k0*neff [rad/m] を返すため、solve() の thickness は
     物理厚 [m] をそのまま渡す
   - scatterPlaneWave() の REF/TRN は入射波数 k0*sqrt(eps_ref) で
     正規化された次数別の効率 (合計が全反射率/全透過率)
+  - 誘電率は複素数。時間規約 exp(-iwt) なので損失は「正」の虚部。
 */
 
 #include "orcwa_rcwa.h"
+#include "rcwa_hdf5.h"
 
 #include "rcwa/RCWASolver.h"
 #include "rcwa/Layer.h"
@@ -25,6 +32,7 @@ rcwa_efficiency.csv に出力する。
 extern "C" {
 extern int    NFreq1;
 extern double *Freq1;
+extern char   Title[];
 extern void   monitor1(FILE *, const char []);
 }
 
@@ -40,8 +48,14 @@ Layer makeLayer(const rcwalayer_t &l, double period)
 	Eigen::VectorXs cy(2);
 	cy << 0.0, period;
 	Eigen::MatrixXcs eps(1, 2);
-	eps << scalex(l.eps1), scalex(l.eps2);
+	eps << scalex(l.eps1, l.eps1i), scalex(l.eps2, l.eps2i);
 	return Layer(cx, cy, eps);
+}
+
+/* 層が無損失か (虚部がゼロか) */
+bool isLossless(const rcwalayer_t &l)
+{
+	return (l.eps1i == 0.0) && (l.eps2i == 0.0);
 }
 
 } // namespace
@@ -58,6 +72,38 @@ extern "C" int rcwa_run(FILE *fp_log)
 	sprintf(str, "RCWA : N=%d (order %d), period=%.4e[m], %d layers, %d frequencies",
 		NRcwaHarmonics, 2 * NRcwaHarmonics + 1, RcwaPeriod, NRcwaLayer, NFreq1);
 	monitor1(fp_log, str);
+	sprintf(str, "RCWA : incidence theta=%.4g[deg] phi=%.4g[deg]", RcwaTheta, RcwaPhi);
+	monitor1(fp_log, str);
+
+	/* 損失層があると R+T<1 が正常なので、エネルギー保存の警告を切り替える */
+	bool lossless = true;
+	for (int n = 0; n < NRcwaLayer; n++) {
+		if (!isLossless(RcwaLayer[n])) lossless = false;
+	}
+
+	const double thetaRad = RcwaTheta * M_PI / 180.0;
+	const double phiRad   = RcwaPhi   * M_PI / 180.0;
+
+	/* 入射 E 場の横 (xy) 成分。単位振幅 (|E_inc_3D|²=1) の直交基底:
+	     TM (p): 入射面内     → ( cosθ·cosφ,  cosθ·sinφ)
+	     TE (s): 入射面に直交 → (−sinφ,       cosφ)
+	   法線入射では両者が縮退するので x/y 方向をそのまま使う。
+	   ここは rcwa/RCWADriver.cpp と同一でなければならない。 */
+	double tmX, tmY, teX, teY;
+	if (std::fabs(std::sin(thetaRad)) < 1e-9) {
+		tmX = 1.0; tmY = 0.0;
+		teX = 0.0; teY = 1.0;
+	} else {
+		tmX = std::cos(thetaRad) * std::cos(phiRad);
+		tmY = std::cos(thetaRad) * std::sin(phiRad);
+		teX = -std::sin(phiRad);
+		teY =  std::cos(phiRad);
+	}
+
+	/* 入射側半無限層の屈折率 (Bloch 波数に使う)。両端は均質前提なので eps1 を見る。
+	   複素平方根の実部を取ることで eps<1 (プラズマ等) にも対応する。 */
+	const scalex eps_inc = scalex(RcwaLayer[0].eps1, RcwaLayer[0].eps1i);
+	const double n_inc = std::max(std::sqrt(eps_inc).real(), 1e-6);
 
 	std::vector<int> stack(NRcwaLayer);
 	std::vector<scalar> thickness(NRcwaLayer);
@@ -76,6 +122,11 @@ extern "C" int rcwa_run(FILE *fp_log)
 	}
 	fprintf(csv, "frequency[Hz],lambda[m],R_TE,T_TE,R_TM,T_TM\n");
 
+	/* HDF5 出力用に全点を溜める (CSV は従来どおり逐次書き出す)。
+	   レイアウトは [npol][nfreq] の行優先: 先に TE の全周波数、次に TM。 */
+	std::vector<rcwa_spectrum_row_t> spectrum(2 * (size_t)NFreq1);
+	int nwritten = 0;
+
 	int ierr = 0;
 	for (int ifreq = 0; ifreq < NFreq1; ifreq++) {
 		const double freq = Freq1[ifreq];
@@ -93,15 +144,18 @@ extern "C" int rcwa_run(FILE *fp_log)
 		for (int n = 0; n < NRcwaLayer; n++) {
 			solver.addLayer(makeLayer(RcwaLayer[n], RcwaPeriod));
 		}
+		/* 斜め入射の Bloch 波数。solve() より前に設定する必要がある */
+		solver.setBlochWavevector(k0 * n_inc * std::sin(thetaRad) * std::cos(phiRad),
+		                          k0 * n_inc * std::sin(thetaRad) * std::sin(phiRad));
 		solver.solve(lambda, stack, thickness);
 
-		/* TE (E//y: 格子溝方向) と TM (E//x) の両偏波 */
+		/* 法線入射では TE = E//y (格子溝方向)、TM = E//x に退化する */
 		double R[2], T[2];
 		for (int pol = 0; pol < 2; pol++) {
+			const double px = (pol == 0) ? teX : tmX;
+			const double py = (pol == 0) ? teY : tmY;
 			Eigen::VectorXcs cInc;
-			solver.generateHorizontalPlaneWave(
-				(pol == 0) ? 0.0 : 1.0,
-				(pol == 0) ? 1.0 : 0.0, 0, cInc);
+			solver.generateHorizontalPlaneWave(px, py, 0, cInc);
 			Eigen::VectorXs REF, TRN;
 			solver.scatterPlaneWave(cInc, 0, NRcwaLayer - 1, k0, REF, TRN);
 			R[pol] = REF.sum();
@@ -111,15 +165,33 @@ extern "C" int rcwa_run(FILE *fp_log)
 		fprintf(csv, "%.8e,%.8e,%.8e,%.8e,%.8e,%.8e\n",
 			freq, lambda, R[0], T[0], R[1], T[1]);
 
+		for (int pol = 0; pol < 2; pol++) {
+			rcwa_spectrum_row_t &row =
+				spectrum[(size_t)pol * (size_t)NFreq1 + (size_t)ifreq];
+			row.frequency = freq;
+			row.lambda    = lambda;
+			row.R = R[pol];
+			row.T = T[pol];
+			row.A = 1.0 - R[pol] - T[pol];
+		}
+		nwritten++;
+
 		sprintf(str, "  f=%.4e[Hz] lambda=%.4e[m] R/T(TE)=%.5f/%.5f R/T(TM)=%.5f/%.5f",
 			freq, lambda, R[0], T[0], R[1], T[1]);
 		monitor1(fp_log, str);
 
-		/* 無損失入力に対するエネルギー保存の破れは実装異常 */
+		/* 無損失入力に対するエネルギー保存の破れは実装異常。
+		   損失層があると R+T<1 が正常なので、その場合は R+T>1 (利得) のみ疑う。 */
 		for (int pol = 0; pol < 2; pol++) {
-			if (std::fabs(R[pol] + T[pol] - 1.0) > 1e-3) {
-				sprintf(str, "*** warning : R+T=%.6f (energy not conserved)",
-					R[pol] + T[pol]);
+			const double sum = R[pol] + T[pol];
+			if (lossless) {
+				if (std::fabs(sum - 1.0) > 1e-3) {
+					sprintf(str, "*** warning : R+T=%.6f (energy not conserved)", sum);
+					monitor1(fp_log, str);
+				}
+			} else if (sum > 1.0 + 1e-3) {
+				sprintf(str, "*** warning : R+T=%.6f > 1 with lossy layers"
+					" (check the sign of the eps imaginary part)", sum);
 				monitor1(fp_log, str);
 			}
 		}
@@ -129,6 +201,31 @@ extern "C" int rcwa_run(FILE *fp_log)
 
 	if (!ierr) {
 		sprintf(str, "output : %s", csvname);
+		monitor1(fp_log, str);
+
+		/* GUI 表示用の HDF5。CSV と並行して出力する (既存の流れは変えない)。
+		   書けなくても計算結果は CSV にあるので致命的にはしない。 */
+		const char h5name[] = "time_series_data.h5";
+		rcwa_meta_t meta;
+		meta.title      = Title;
+		meta.nharmonics = NRcwaHarmonics;
+		meta.period     = RcwaPeriod;
+		meta.nlayer     = NRcwaLayer;
+		meta.theta      = RcwaTheta;
+		meta.phi        = RcwaPhi;
+		const char *pol_labels[2] = { "TE", "TM" };
+		/* 途中で break した場合に備え、実際に埋まった点数だけ詰め直す */
+		if (nwritten < NFreq1) {
+			for (int i = 0; i < nwritten; i++)
+				spectrum[(size_t)nwritten + (size_t)i] =
+					spectrum[(size_t)NFreq1 + (size_t)i];
+		}
+		if (rcwa_write_hdf5(h5name, &meta, spectrum.data(),
+		                    2, nwritten, pol_labels) == 0) {
+			sprintf(str, "output : %s", h5name);
+		} else {
+			sprintf(str, "*** warning : %s write failed (CSV is still valid)", h5name);
+		}
 		monitor1(fp_log, str);
 	}
 

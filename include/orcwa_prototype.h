@@ -76,6 +76,8 @@ extern void        plot3dGeom(void);
 extern void        plot3dNear2d0(int, int, double **, const double [], const double [], int, int, int, double, double, int, const char [], double, char, double, const char [], int, double (*)[2][3]);
 extern void        post(void);
 extern int         post_data(FILE *);
+// post_data() が設定する: RCWA モードの入力 (rcwalayer を含む) なら 1
+extern int         PostRcwaInput;
 extern void        readout(FILE *);
 extern void        rectangleContour(double [4][3], double, double, int);
 extern void        rgbColor(double, unsigned char *, unsigned char *, unsigned char *, int);

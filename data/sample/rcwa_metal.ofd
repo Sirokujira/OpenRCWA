@@ -1,0 +1,34 @@
+OpenRCWA 4 2
+title = RCWA sample: lossy metal film (complex permittivity, .ofd path)
+#
+# GUI (OpenFDTD-X) から開ける .ofd 形式で、損失のある金属薄膜を扱う例。
+#
+# rcwalayer = <eps1r> <eps2r> <fill> <thickness[m]> [<eps1i> <eps2i>]
+#   末尾 2 つ (誘電率の虚部) は省略可能。省略すると無損失 (従来どおり)。
+#   **時間規約は exp(-iwt) なので、損失は「正」の虚部**。
+#   負の虚部は利得媒質になり R+T>1 が出るため、入力チェックで弾かれる。
+#   金属のように実部が負の材料も指定できる。
+#
+# ここでは銀の波長 600nm 付近の値を使っている:
+#   Drude モデル eps = 1 - wp^2/(w^2 + i*gamma*w),  wp=1.36e16, gamma=3.0e13
+#   → lambda=600nm で eps = -17.74 + 0.18i
+# .ofd 経路は分散 (波長依存) を扱えないので eps は固定値。したがって
+# 結果が物理的に意味を持つのは 600nm 近傍だけである。波長依存が必要なら
+# .orcwa 形式 (material_dispersion) と orcwa_rcwa を使うこと。
+#
+# 期待される挙動:
+#   30nm と薄いので R が高く (~0.85)、T もわずかに残り、吸収 A=1-R-T>0。
+#   損失層があるので R+T<1 が正常。R+T>1 になったら虚部の符号を疑う。
+#
+# 実行:
+#   cd data/sample && ../../bin/orcwa -n 4 rcwa_metal.ofd
+rcwa = 3 3.0e-7
+# 空気 (半無限)
+rcwalayer = 1.0 1.0 0.5 0
+# 銀 30nm (eps = -17.74 + 0.18i)
+rcwalayer = -17.74 -17.74 0.5 3.0e-8 0.18 0.18
+# ガラス基板 (半無限)
+rcwalayer = 2.25 2.25 0.5 0
+# 600nm 近傍のみ (eps を固定値にしているため)
+frequency1 = 4.9966e14 4.9966e14 0
+end

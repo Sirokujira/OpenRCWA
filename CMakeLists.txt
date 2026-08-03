@@ -229,9 +229,11 @@ if(WITH_RCWA)
     # (FDTD ソルバと同じ入力形式を共有し、層状周期構造として解釈する)
     add_executable(orcwa_rcwa
         ${CMAKE_SOURCE_DIR}/src/rcwa_Main.cpp
+        ${CMAKE_SOURCE_DIR}/sol/rcwa_hdf5.c
         ${RCWA_SRC_FILES})
     target_include_directories(orcwa_rcwa PUBLIC
         ${CMAKE_SOURCE_DIR}
+        ${CMAKE_SOURCE_DIR}/include   # rcwa_hdf5.h
         ${MKL_INCLUDE_DIR}
         ${EIGEN3_INCLUDE_DIRS})
     # libm は MATH_LIB 経由 (MSVC では空)。C++ ランタイムは CXX ターゲットに
@@ -239,7 +241,7 @@ if(WITH_RCWA)
     target_link_libraries(orcwa_rcwa PRIVATE
         ${MKL_LIBRARIES}
         ${TBB_LIBRARIES}
-        ${MATH_LIB})
+        ${MATH_LIB} HDF5::HDF5)
     set_property(TARGET orcwa_rcwa PROPERTY CXX_STANDARD 17)
 endif()
 
@@ -484,7 +486,7 @@ else()
     else ()
         # RCWA コア (rcwa/*.cpp) を sol/rcwa_bridge.cpp 経由で orcwa に結線する
         add_executable(orcwa ${SOURCES} src/sol_Main.c
-            sol/rcwa_bridge.cpp ${RCWA_SRC_FILES})
+            sol/rcwa_bridge.cpp sol/rcwa_hdf5.c ${RCWA_SRC_FILES})
         if(MSVC)
             # MSVC の既定スタック 1MB では FDTD ループが不足する
             target_link_options(orcwa PRIVATE /STACK:16777216)

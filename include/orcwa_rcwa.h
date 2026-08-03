@@ -17,10 +17,16 @@ extern "C" {
 /* 1層 = x 方向 2 セルの 1D 格子 (y 方向は一様)。
    eps1 : x = 0 .. fill*period の比誘電率
    eps2 : x = fill*period .. period の比誘電率
-   一様層は eps1 = eps2 とする */
+   一様層は eps1 = eps2 とする
+
+   誘電率の虚部 (eps1i/eps2i) は損失を表す。時間規約は exp(-iwt) なので
+   損失は「正」の虚部。負にすると利得媒質になり T>1 が出るので注意。
+   金属など実部が負の材料も指定できる。 */
 typedef struct {
 	double eps1;
 	double eps2;
+	double eps1i;      /* eps1 の虚部 (省略時 0)。正 = 損失 */
+	double eps2i;      /* eps2 の虚部 (省略時 0)。正 = 損失 */
 	double fill;       /* eps1 の占有率 (0 < fill < 1) */
 	double thickness;  /* 層厚 [m] (先頭/末尾の半無限層では無視) */
 } rcwalayer_t;
@@ -29,6 +35,10 @@ extern int          NRcwaHarmonics;  /* 空間高調波次数 N (計算次数は
 extern double       RcwaPeriod;      /* 格子周期 [m] */
 extern int          NRcwaLayer;      /* 層数 (0 = FDTD 経路) */
 extern rcwalayer_t  *RcwaLayer;      /* 層スタック (入射側 → 透過側) */
+/* 入射方向 [deg]。planewave キーから複写する (無指定なら 0 = 法線入射)。
+   planewave の pol は使わない — RCWA モードは常に TE/TM 両方を出力する。 */
+extern double       RcwaTheta;
+extern double       RcwaPhi;
 
 /* frequency1 掃引の回折効率を計算し rcwa_efficiency.csv に出力する。
    正常終了で 0 */

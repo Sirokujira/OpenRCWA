@@ -9,6 +9,9 @@ read post data
 
 #define MAXTOKEN 1000
 
+// RCWA モードの入力 (rcwalayer を含む) なら 1。post_Main が参照する。
+int PostRcwaInput = 0;
+
 int post_data(FILE *fp)
 {
 	int    ntoken, nline;
@@ -20,6 +23,8 @@ int post_data(FILE *fp)
 	const char errfmt3[] = "*** invalid %s data #%d\n";
 
 	// initialize
+
+	PostRcwaInput = 0;
 
 	MatchingLoss = 0;
 
@@ -135,6 +140,13 @@ int post_data(FILE *fp)
 			version = (10 * atoi(token[1])) + atoi(token[2]);
 			version = version;  // dummy
 			nline++;
+		}
+		// RCWA モードの入力 (rcwalayer を含む) を識別する。
+		// この入力では orcwa が RCWA コアに分岐して rcwa_efficiency.csv を
+		// 出力し、時間領域データ (orcwa.out) は生成しない。
+		// ポスト処理の対象が無いことを post_Main に伝えるためのフラグ。
+		else if (!strcmp(strkey, "rcwalayer")) {
+			PostRcwaInput = 1;
 		}
 		else if (!strcmp(strkey, "matchingloss")) {
 			MatchingLoss = atoi(token[2]);

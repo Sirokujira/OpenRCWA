@@ -42,6 +42,18 @@ int main(int argc, char *argv[])
 		exit(1);
 	}
 
+	// RCWA モードの入力にはポスト処理の対象が無い。
+	// orcwa は rcwalayer を見て RCWA コアに分岐し、回折効率を
+	// rcwa_efficiency.csv に出力して終了する (時間領域の orcwa.out は
+	// 生成しない)。ここでエラーにすると、ソルバ実行後に必ず post を
+	// 呼ぶ GUI/スクリプトの流れが失敗するため、正常終了で抜ける。
+	if (PostRcwaInput) {
+		fclose(fp_in);
+		printf("RCWA mode: no post process (results are in rcwa_efficiency.csv)\n");
+		if (prompt) getchar();
+		return 0;
+	}
+
 	// read orcwa.out
 	if ((fp_out = fopen(fn_out, "rb")) == NULL) {
 		printf(errfmt, fn_out);

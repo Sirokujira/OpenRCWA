@@ -62,8 +62,12 @@ $OLDPWD/bin/orcwa -n 2 grating.ofd && cat rcwa_efficiency.csv
 
 ## RCWA コアの規則 (数値安定性 — 実際に踏んだもの)
 
-- `.ofd` 入力キー: `rcwa = <N> <period[m]>` / `rcwalayer = <eps1> <eps2> <fill>
-  <thickness[m]>`。**厚みは物理長** (γ = k0·neff スケーリング前提)。
+- `.ofd` 入力キー: `rcwa = <N> <period[m]>` / `rcwalayer = <eps1r> <eps2r> <fill>
+  <thickness[m]> [<eps1i> <eps2i>]` / `planewave = <θ> <φ> <pol>`。
+  **厚みは物理長** (γ = k0·neff スケーリング前提)。誘電率の虚部は省略可
+  (正 = 損失、実部が負の金属も可)。`planewave` の pol は無視され、TE/TM 両方を
+  常に出力する。`.ofd` 経路は 1D・単一周期・分散なしに限られる (2D や分散は
+  `.orcwa` + `orcwa_rcwa`)。
 - 固有値ソルバーは `rcwa/MKLEigenSolver.hpp` の 3 分岐
   (MKL / LAPACKE / Eigen フォールバック)。**±m 次数の縮退固有値**で
   固有ベクトル基底が不良条件になり回折効率が発散する事象があるため、
@@ -71,6 +75,9 @@ $OLDPWD/bin/orcwa -n 2 grating.ofd && cat rcwa_efficiency.csv
   残差検算 ‖A·V−V·D‖ + Eigen 解き直しが入っている。**外さない**。
 - `EIGEN_DONT_PARALLELIZE` は OpenMP との競合回避。外さない。
 - エネルギー保存 (R+T=1) チェックを新機能でも維持する。
+- LAPACKE 経路は相対残差 ≤ 1e-8 を毎回検算し、外れたら Eigen で解き直す。
+  macOS では全ソルブでこの検算に落ちる事象を実測 (結果自体は正しい)。
+  詳細と切り分け手順は `AGENTS.md` の「数値安定性」節。
 
 ## 重要な物理・実装規約
 
@@ -90,6 +97,16 @@ $OLDPWD/bin/orcwa -n 2 grating.ofd && cat rcwa_efficiency.csv
   `material_mu = m mur [mui]` でも直接指定できる。μ=1 の問題は高速経路を通る。
 - **多極分散**: `material_dispersion` を同じ材料に複数行書くと極が**加算**される
   (`eps = einf + Σ_p ae_p²/(ce_p²−ω²−i·be_p·ω)`)。導電率項とも加算される。
+- **RCWA 入力に `orcwa_post` は使えない**。`rcwalayer` を含む `.ofd` では
+  `orcwa` が RCWA コアに分岐し `rcwa_efficiency.csv` のみを出力する
+  (時間領域の `orcwa.out` は作らない)。`orcwa_post` は `rcwalayer` を検出して
+  「ポスト処理なし」と表示し**正常終了 (exit 0)** する。ソルバ後に必ず post を
+  呼ぶ GUI の流れを壊さないための仕様なので、エラーに戻さないこと。
+- サンプル入力は `data/sample/` (解析解つき)。一覧は `AGENTS.md` を参照。
+- **HDF5 (`time_series_data.h5`) は FDTD と RCWA で中身が違う**。GUI は
+  `/metadata/solver_mode` の有無で判別する (RCWA のみ存在)。RCWA は
+  `/rcwa/spectrum` に compound `[npol][NFreq]` = `{frequency, lambda, R, T, A}`
+  を書く。CSV も従来どおり並行出力する。詳細は `AGENTS.md`。
 
 ## 移植性
 
