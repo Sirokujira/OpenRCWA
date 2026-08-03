@@ -1,0 +1,33 @@
+OpenRCWA 4 2
+title = RCWA sample: quarter-wave AR coating on glass (R=0 at 550nm)
+#
+# orcwa (.ofd 経路) の RCWA モードのサンプル。grating.ofd が周期格子の例
+# なのに対し、こちらは均質な多層膜 (反射防止コート) の例。
+#
+# 空気 / 単層 AR 膜 / ガラス基板 の 3 層。AR 条件は
+#   n_film = sqrt(n_air * n_glass) = sqrt(1 * 1.5) = 1.224745  (eps = 1.5)
+#   d      = lambda0 / (4 * n_film) = 550nm / 4.898979 = 112.268 nm
+# を満たすとき、設計波長 lambda0 = 550 nm で反射がゼロになる。
+#
+# 実行:
+#   cd data/sample && ../../bin/orcwa -n 4 ar_coating.ofd
+#   → rcwa_efficiency.csv に波長ごとの R/T が出る。
+#     f = 5.45077e14 [Hz] (lambda = 550.0 nm) の行で R がほぼ 0 になり、
+#     そこから離れるほど R が増える V 字のディップが確認できる。
+#     コート無し (下の rcwalayer を 2 行にする) なら R = 0.04 で一定。
+#
+# 注意: rcwa_efficiency.csv 以外の出力は無い。RCWA モードでは時間領域の
+# orcwa.out を生成しないため、orcwa_post は「ポスト処理なし」で正常終了する。
+#
+# rcwa = <harmonics N> <period[m]>
+# 均質層のみなので回折は起きず、N は小さくてよい (周期の値も結果に影響しない)。
+rcwa = 3 3.0e-7
+# rcwalayer = <eps1> <eps2> <fill> <thickness[m]>   (入射側 → 透過側)
+# 先頭と末尾は半無限層 (thickness は無視される)。
+# eps1 = eps2 なら fill によらず均質層になる。
+rcwalayer = 1.0 1.0 0.5 0
+rcwalayer = 1.5 1.5 0.5 1.122680e-7
+rcwalayer = 2.25 2.25 0.5 0
+# 設計波長 550nm (f = 5.45077e14) をちょうど格子点に含む掃引
+frequency1 = 4.45077e14 6.45077e14 20
+end

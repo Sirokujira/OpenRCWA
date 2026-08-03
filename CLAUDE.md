@@ -71,6 +71,9 @@ $OLDPWD/bin/orcwa -n 2 grating.ofd && cat rcwa_efficiency.csv
   残差検算 ‖A·V−V·D‖ + Eigen 解き直しが入っている。**外さない**。
 - `EIGEN_DONT_PARALLELIZE` は OpenMP との競合回避。外さない。
 - エネルギー保存 (R+T=1) チェックを新機能でも維持する。
+- LAPACKE 経路は相対残差 ≤ 1e-8 を毎回検算し、外れたら Eigen で解き直す。
+  macOS では全ソルブでこの検算に落ちる事象を実測 (結果自体は正しい)。
+  詳細と切り分け手順は `AGENTS.md` の「数値安定性」節。
 
 ## 重要な物理・実装規約
 
@@ -90,6 +93,12 @@ $OLDPWD/bin/orcwa -n 2 grating.ofd && cat rcwa_efficiency.csv
   `material_mu = m mur [mui]` でも直接指定できる。μ=1 の問題は高速経路を通る。
 - **多極分散**: `material_dispersion` を同じ材料に複数行書くと極が**加算**される
   (`eps = einf + Σ_p ae_p²/(ce_p²−ω²−i·be_p·ω)`)。導電率項とも加算される。
+- **RCWA 入力に `orcwa_post` は使えない**。`rcwalayer` を含む `.ofd` では
+  `orcwa` が RCWA コアに分岐し `rcwa_efficiency.csv` のみを出力する
+  (時間領域の `orcwa.out` は作らない)。`orcwa_post` は `rcwalayer` を検出して
+  「ポスト処理なし」と表示し**正常終了 (exit 0)** する。ソルバ後に必ず post を
+  呼ぶ GUI の流れを壊さないための仕様なので、エラーに戻さないこと。
+- サンプル入力は `data/sample/` (解析解つき)。一覧は `AGENTS.md` を参照。
 
 ## 移植性
 

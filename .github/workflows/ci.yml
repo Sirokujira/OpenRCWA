@@ -120,6 +120,48 @@ jobs:
           print(f"RCWA Fresnel OK: R={R:.5f}, T={T:.5f}, A={A:.5f}, R+T={RT:.5f}")
           PY
 
+      # data/sample/ の RCWA サンプルを一通り実行する。解析解が分かっている
+      # ものは値そのものを、それ以外は吸収込みのエネルギー保存 R+T+A=1 を
+      # 検証する (Drude 金属は損失があるので R+T<1 になる)。
+      - name: Smoke test — RCWA samples (data/sample)
+        run: |
+          mkdir -p /tmp/smoke-samples && cd /tmp/smoke-samples
+          # --- .orcwa 経路 (orcwa_rcwa ドライバ) ---
+          for s in rcwa_fresnel rcwa_brewster rcwa_pillar2d rcwa_metal_drude; do
+            "$GITHUB_WORKSPACE/bin/orcwa_rcwa" -o "$s.csv" \
+              "$GITHUB_WORKSPACE/data/sample/$s.orcwa" > "$s.log" 2>&1
+            grep -q "normal end" "$s.log"
+            # CSV: lambda[um], R, T, A, R+T
+            awk -F, -v s="$s" 'NR>1 && $0 !~ /^#/ {
+              if (($2+$3+$4-1)^2 > 1e-6) {
+                print "energy not conserved in", s ":", $0; exit 1 } }' "$s.csv"
+            echo "  $s OK"
+          done
+          # ブリュースター角 (atan 1.5) の TM 反射は解析的にゼロ
+          awk -F, 'NR>1 && $0 !~ /^#/ {
+            if ($2 > 1e-8) { print "Brewster R too large:", $2; exit 1 } }' rcwa_brewster.csv
+          # 空気/ガラス界面の R は波長によらず 0.04
+          awk -F, 'NR>1 && $0 !~ /^#/ {
+            if (($2-0.04)^2 > 4e-6) { print "Fresnel R != 0.04:", $2; exit 1 } }' rcwa_fresnel.csv
+          # Drude 金属は損失媒質: 吸収は正 (負なら exp(-iwt) の符号規約破れ)
+          awk -F, 'NR>1 && $0 !~ /^#/ {
+            if ($4 <= 0) { print "metal absorption not positive:", $4; exit 1 } }' rcwa_metal_drude.csv
+          # --- .ofd 経路 (orcwa 内蔵ブリッジ): 1/4 波長 AR コート ---
+          cp "$GITHUB_WORKSPACE/data/sample/ar_coating.ofd" .
+          "$GITHUB_WORKSPACE/bin/orcwa" -n 2 ar_coating.ofd > ar.log 2>&1
+          grep -q "normal end" ar.log
+          # 設計波長 550nm (f=5.45077e14) で反射がゼロになる
+          awk -F, 'NR>1 { if (($1-5.45077e14)^2 < 1e20) {
+              found=1
+              if ($3 > 1e-6) { print "AR coating R too large at design freq:", $3; exit 1 } } }
+            END { if (!found) { print "design frequency row not found"; exit 1 } }' rcwa_efficiency.csv
+          echo "  ar_coating OK"
+          # --- 回帰: RCWA 入力に対する orcwa_post は正常終了する ---
+          # (RCWA モードは orcwa.out を作らないため、以前は open error で
+          #  exit 1 になり、ソルバ後に必ず post を呼ぶ GUI の流れが失敗した)
+          "$GITHUB_WORKSPACE/bin/orcwa_post" -n 2 ar_coating.ofd | tee post.log
+          grep -q "no post process" post.log
+
       - name: Upload binaries (artifact)
         uses: actions/upload-artifact@v4
         with:

@@ -69,6 +69,27 @@ $OLDPWD/bin/orcwa -n 2 grating.ofd && cat rcwa_efficiency.csv
     [-field Ez -slice xz -scoord 0 -sopt mod] [-device] input.orcwa
 ```
 
+## サンプル入力 (`data/sample/`)
+
+解析解が分かっているものを揃えてある。物理を変更したら**まずこれで確認**する。
+CI (Linux ジョブ) が全件を実行し、エネルギー保存と解析解との一致を検証する。
+
+| ファイル | 経路 | 内容 / 期待値 |
+|---|---|---|
+| `rcwa_fresnel.orcwa` | `orcwa_rcwa` | 空気/ガラス界面。R=0.04 (波長によらず一定) |
+| `rcwa_brewster.orcwa` | `orcwa_rcwa` | ブリュースター角 56.30993° の TM 入射。R≈0 |
+| `rcwa_pillar2d.orcwa` | `orcwa_rcwa` | 2D 正方格子の円柱 (メタサーフェス)。R+T=1 |
+| `rcwa_metal_drude.orcwa` | `orcwa_rcwa` | Drude 金属薄膜。**A>0** (負なら符号規約破れ) |
+| `ar_coating.ofd` | `orcwa` | 1/4 波長 AR コート。設計波長 550nm で R≈0 |
+| `grating.ofd` | `orcwa` | 周期格子の波長掃引。全点で R+T=1 |
+| `dipole.ofd` | `orcwa` | FDTD (RCWA ではない) |
+
+**RCWA モードの入力に `orcwa_post` は使えない。** `rcwalayer` を含む `.ofd` を
+与えると `orcwa` は RCWA コアに分岐して `rcwa_efficiency.csv` だけを出力し、
+時間領域の `orcwa.out` を作らない。`orcwa_post` は `rcwalayer` を検出したら
+「ポスト処理なし」と表示して**正常終了 (exit 0)** する — ソルバ後に必ず post を
+呼ぶ GUI/スクリプトの流れを壊さないための仕様。エラーにしてはいけない。
+
 ## ディレクトリ構成
 
 | パス | 内容 |
@@ -143,6 +164,18 @@ $OLDPWD/bin/orcwa -n 2 grating.ofd && cat rcwa_efficiency.csv
   Eigen 経路には対角への非一様微小摂動 (~1e-11·‖A‖)、LAPACKE 経路には
   残差検算 ‖A·V−V·D‖ + Eigen 解き直しが入っている。**削除しない**。
 - `EIGEN_DONT_PARALLELIZE` は OpenMP との競合回避。外さない。
+- LAPACKE 経路は毎回 ‖A・V−V・D‖∞/‖A‖∞ ≤ 1e-8 を検算し、外れたら Eigen で
+  解き直す。**環境によっては毎回この検算に落ちる** (実測: macOS で
+  `LAPACKE geev unreliable (info=0)` が全ソルブで発生。結果は Eigen 経路で
+  正しく、R+T=1 も成立する)。原因は LAPACK 本体と LAPACKE の提供元の
+  食い違いが疑わしい (macOS の `find_package(LAPACK)` は Accelerate
+  framework を拾う一方、LAPACKE は Homebrew の `liblapacke.dylib` になる)。
+  切り分けには次を見る:
+  ```bash
+  grep -i lapacke build/CMakeCache.txt   # どのヘッダ/ライブラリを選んだか
+  otool -L bin/orcwa | grep -i "lapack\|Accelerate"   # 実際のリンク先
+  ```
+  ログは最初の 1 回だけ相対残差つきで出る (毎ソルブ出すと大量になるため)。
 - C99 VLA 禁止 (MSVC 対応)。libm は `MATH_LIB` 変数経由 (MSVC では空)。
   C++ ランタイムは CMake が自動でリンクするので `stdc++` を明示しない。
 - MSVC は `/bigobj` 必須。Eigen のテンプレートを多用する翻訳単位

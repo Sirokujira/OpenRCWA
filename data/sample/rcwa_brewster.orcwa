@@ -1,0 +1,27 @@
+OpenRCWA 4 2
+title = RCWA sample 2: oblique incidence at Brewster angle (TM, R=0)
+#
+# 斜め入射と偏波指定の例。空気/ガラス (n=1.5) の界面に、ブリュースター角
+#   theta_B = atan(n2/n1) = atan(1.5) = 56.30993247 [deg]
+# で TM (p) 偏波を入射すると、反射がゼロになる (解析解 R_TM = 0)。
+#
+# 確認のしかた:
+#   ./bin/orcwa_rcwa -o rcwa.csv data/sample/rcwa_brewster.orcwa
+#   → R が 1e-8 程度以下、T ≈ 1、R+T = 1 になる。
+#
+# planewave の pol を 2 (TE) に変えると、同じ角度でも
+#   R_TE = ((cos - 1.5*cos_t)/(cos + 1.5*cos_t))^2 ≈ 0.1479
+# と有限の反射が残る。TM/TE の違いを見るのに使える。
+#
+# pol の指定: 1=TM(p), 2=TE(s), 3=psi[deg] の直線偏波 (0=TM, 90=TE),
+#             4=右円偏波, 5=左円偏波
+xmesh = -2.5e-07 10 2.5e-07
+ymesh = -2.5e-07 10 2.5e-07
+zmesh = -3e-07 10 0.0 10 7e-07
+material = 1 2.25 0 1 0
+geometry = 2 1 -2.5e-07 2.5e-07 -2.5e-07 2.5e-07 -3e-07 0
+planewave = 56.30993247 0 1
+pbc = 1 1 0
+rcwaorder = 6 0
+frequency1 = 5.0e14 5.0e14 0
+end

@@ -1,6 +1,7 @@
 #pragma once
 #include "defns.h"
 #include <Eigen/Core>
+#include <atomic>
 
 #if !defined(USE_MKL) && !defined(USE_LAPACKE)
 // MKL/LAPACKE のいずれも利用できない環境では Eigen の固有値ソルバにフォールバックする
@@ -61,14 +62,20 @@ private:
     MatrixType V_;
     VectorType d_;
 
-    // ‖A・V − V・diag(d)‖∞ / ‖A‖∞ による検算
-    bool verified(const MatrixType& A) const
+    // ‖A・V − V・diag(d)‖∞ / ‖A‖∞ (相対残差)
+    double relResidual(const MatrixType& A) const
     {
         const auto normA = A.cwiseAbs().maxCoeff();
-        if (!(normA > 0)) return true;
+        if (!(normA > 0)) return 0.0;
         const auto res =
             (A * V_ - V_ * d_.asDiagonal()).cwiseAbs().maxCoeff();
-        return res <= 1e-8 * normA;
+        return static_cast<double>(res) / static_cast<double>(normA);
+    }
+
+    // 相対残差による検算
+    bool verified(const MatrixType& A) const
+    {
+        return relResidual(A) <= 1e-8;
     }
 
     void computeEigenFallback(const MatrixType& A)
@@ -136,12 +143,23 @@ void MKLEigenSolver<MatrixType>::compute(const MatrixType& A)
     }
 
     if (info != 0 || !verified(A)) {
-        std::clog << "[MKLEigenSolver] LAPACKE geev unreliable (info="
-                  << info << "), falling back to Eigen solver\n";
+        // 層・波長ごとに毎回出ると大量になるため、最初の 1 回だけ報告する。
+        // 相対残差を併記するのは、環境依存で LAPACKE が使えない場合
+        // (提供元の異なる LAPACK 本体とリンクされている等) に、
+        // 「わずかに閾値を超えた」のか「桁違いに壊れている」のかを
+        // ログだけで切り分けられるようにするため。
+        static std::atomic<bool> warned{false};
+        if (!warned.exchange(true)) {
+            std::clog << "[MKLEigenSolver] LAPACKE geev unreliable (info="
+                      << info << ", relative residual=" << relResidual(A)
+                      << " > 1e-8), falling back to Eigen solver"
+                         " (further occurrences are not reported)\n";
+        }
         computeEigenFallback(A);
         if (!verified(A)) {
             std::clog << "[MKLEigenSolver] warning: Eigen solver residual"
-                         " also exceeds tolerance\n";
+                         " also exceeds tolerance (relative residual="
+                      << relResidual(A) << ")\n";
         }
     }
 }
