@@ -59,7 +59,7 @@ jobs:
           fail=0
           for f in rcwa/*.cpp src/rcwa_Main.cpp tests/test_rcwa_input.cpp; do
             if ! clang++ -std=c++17 -stdlib=libc++ -fsyntax-only \
-                 -I/usr/include/eigen3 -I. "$f"; then
+                 -I/usr/include/eigen3 -Iinclude -I. "$f"; then
               echo "libc++ compile check failed: $f"
               fail=1
             fi
