@@ -62,8 +62,12 @@ $OLDPWD/bin/orcwa -n 2 grating.ofd && cat rcwa_efficiency.csv
 
 ## RCWA コアの規則 (数値安定性 — 実際に踏んだもの)
 
-- `.ofd` 入力キー: `rcwa = <N> <period[m]>` / `rcwalayer = <eps1> <eps2> <fill>
-  <thickness[m]>`。**厚みは物理長** (γ = k0·neff スケーリング前提)。
+- `.ofd` 入力キー: `rcwa = <N> <period[m]>` / `rcwalayer = <eps1r> <eps2r> <fill>
+  <thickness[m]> [<eps1i> <eps2i>]` / `planewave = <θ> <φ> <pol>`。
+  **厚みは物理長** (γ = k0·neff スケーリング前提)。誘電率の虚部は省略可
+  (正 = 損失、実部が負の金属も可)。`planewave` の pol は無視され、TE/TM 両方を
+  常に出力する。`.ofd` 経路は 1D・単一周期・分散なしに限られる (2D や分散は
+  `.orcwa` + `orcwa_rcwa`)。
 - 固有値ソルバーは `rcwa/MKLEigenSolver.hpp` の 3 分岐
   (MKL / LAPACKE / Eigen フォールバック)。**±m 次数の縮退固有値**で
   固有ベクトル基底が不良条件になり回折効率が発散する事象があるため、

@@ -81,8 +81,15 @@ CI (Linux ジョブ) が全件を実行し、エネルギー保存と解析解�
 | `rcwa_pillar2d.orcwa` | `orcwa_rcwa` | 2D 正方格子の円柱 (メタサーフェス)。R+T=1 |
 | `rcwa_metal_drude.orcwa` | `orcwa_rcwa` | Drude 金属薄膜。**A>0** (負なら符号規約破れ) |
 | `ar_coating.ofd` | `orcwa` | 1/4 波長 AR コート。設計波長 550nm で R≈0 |
+| `rcwa_oblique.ofd` | `orcwa` | 斜め入射 (ブリュースター角)。R_TM≈0, R_TE=0.147929 |
+| `rcwa_metal.ofd` | `orcwa` | 複素誘電率の金属薄膜。R=0.909420, T=0.084430, A>0 |
 | `grating.ofd` | `orcwa` | 周期格子の波長掃引。全点で R+T=1 |
 | `dipole.ofd` | `orcwa` | FDTD (RCWA ではない) |
+
+**`grating.ofd` の既定 `rcwa = 5` は TM が未収束** (R_TM は N=5 で 0.2048、
+N=20 で 0.2068 と約 1% ずれる)。RCWA では誘電率境界で法線 E が不連続になる
+ぶん TM の収束が遅い。スモークには十分だが、格子で TM の値を物理量として
+使うなら **N=12 以上**にして収束を確認すること。
 
 **RCWA モードの入力に `orcwa_post` は使えない。** `rcwalayer` を含む `.ofd` を
 与えると `orcwa` は RCWA コアに分岐して `rcwa_efficiency.csv` だけを出力し、
@@ -142,6 +149,31 @@ CI (Linux ジョブ) が全件を実行し、エネルギー保存と解析解�
 - **一様層の固有モードは縮退しており、列インデックス ≠ ハーモニクス次数。**
   平面波励起は必ず `generateHorizontalPlaneWave` で係数化する
   (固有モード添字の直接指定は ±Kx が混ざり平面波にならない)。
+
+## `.ofd` の RCWA モード (GUI 経路) の要点
+
+`.orcwa` と `.ofd` は**別形式**。拡張子を変えても変換されない。GUI
+(OpenFDTD-X) が開けるのは `.ofd` だけで、RCWA として解くには
+`rcwa` / `rcwalayer` キーが要る (`.orcwa` の `geometry` 系は読まれない)。
+
+```
+rcwa      = <N> <period[m]>
+rcwalayer = <eps1r> <eps2r> <fill> <thickness[m]> [<eps1i> <eps2i>]
+planewave = <theta[deg]> <phi[deg]> <pol>
+```
+
+- **誘電率の虚部は省略可** (省略時 0 = 無損失、従来の書式と後方互換)。
+  損失は **正**の虚部 (exp(−iωt))。負は利得なので入力チェックで弾く。
+  金属のように**実部が負**の材料も指定できる。
+- **`planewave` の pol は無視される。** RCWA モードは常に TE/TM 両方を
+  計算して CSV の 4 列に出力する (列構成を固定するため)。使うのは θ/φ のみ。
+  `planewave` 自体を省略すると法線入射。θ は (−90, 90)。
+- 偏波基底と Bloch 波数の決め方は `rcwa/RCWADriver.cpp` と**同一にすること**。
+  正規化 (1/kzinc) と対で決まっており、片方だけ変えると斜め入射で R+T≠1 になる。
+- **`.ofd` 経路は分散 (波長依存) を扱えない**。`rcwalayer` の誘電率は固定値
+  なので、金属など分散の効く材料は設計波長近傍でしか意味を持たない。
+  波長依存が必要なら `.orcwa` の `material_dispersion` + `orcwa_rcwa` を使う。
+- **`.ofd` 経路は 1D・単一周期のみ**。2D 格子は `.orcwa` 経路が必要。
 
 ## `.orcwa` 入力の要点
 
