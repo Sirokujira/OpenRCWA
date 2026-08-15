@@ -129,15 +129,33 @@ jobs:
         run: |
           mkdir -p /tmp/smoke-samples && cd /tmp/smoke-samples
           # --- .orcwa 経路 (orcwa_rcwa ドライバ) ---
-          for s in rcwa_fresnel rcwa_brewster rcwa_pillar2d rcwa_metal_drude; do
+          # CSV: lambda[um], R, T, A, R+T
+          # 注意: A は RCWADriver が A = 1-R-T と定義しているので、
+          # R+T+A-1 を見る検査は恒等的にゼロで**絶対に落ちない**。
+          # 実際に検出力があるのは無損失サンプルの R+T=1 の方なので、
+          # 損失の有無でサンプルを分けて検査する。
+          for s in rcwa_fresnel rcwa_brewster rcwa_pillar2d; do
             "$GITHUB_WORKSPACE/bin/orcwa_rcwa" -o "$s.csv" \
               "$GITHUB_WORKSPACE/data/sample/$s.orcwa" > "$s.log" 2>&1
             grep -q "normal end" "$s.log"
-            # CSV: lambda[um], R, T, A, R+T
+            # 無損失なので R+T=1 (この 3 件は吸収体を含まない)。
+            # 許容 1e-3 なので、実測では T の 1% ずれは捕捉できるが
+            # 0.1% は通る。エネルギー保存は必要条件であって、
+            # 値そのものの正しさは解析解つきサンプルの側で見ている。
             awk -F, -v s="$s" 'NR>1 && $0 !~ /^#/ {
-              if (($2+$3+$4-1)^2 > 1e-6) {
+              if (($2+$3-1)^2 > 1e-6) {
                 print "energy not conserved in", s ":", $0; exit 1 } }' "$s.csv"
-            echo "  $s OK"
+            echo "  $s OK (lossless, R+T=1)"
+          done
+          # 損失サンプルは R+T<1 かつ A>0 が成立すべき
+          for s in rcwa_metal_drude; do
+            "$GITHUB_WORKSPACE/bin/orcwa_rcwa" -o "$s.csv" \
+              "$GITHUB_WORKSPACE/data/sample/$s.orcwa" > "$s.log" 2>&1
+            grep -q "normal end" "$s.log"
+            awk -F, -v s="$s" 'NR>1 && $0 !~ /^#/ {
+              if ($2+$3 >= 1) { print "R+T>=1 with lossy layer in", s ":", $0; exit 1 }
+              if ($4 <= 0)    { print "absorption not positive in", s ":", $0; exit 1 } }' "$s.csv"
+            echo "  $s OK (lossy, R+T<1, A>0)"
           done
           # ブリュースター角 (atan 1.5) の TM 反射は解析的にゼロ
           awk -F, 'NR>1 && $0 !~ /^#/ {
@@ -145,9 +163,6 @@ jobs:
           # 空気/ガラス界面の R は波長によらず 0.04
           awk -F, 'NR>1 && $0 !~ /^#/ {
             if (($2-0.04)^2 > 4e-6) { print "Fresnel R != 0.04:", $2; exit 1 } }' rcwa_fresnel.csv
-          # Drude 金属は損失媒質: 吸収は正 (負なら exp(-iwt) の符号規約破れ)
-          awk -F, 'NR>1 && $0 !~ /^#/ {
-            if ($4 <= 0) { print "metal absorption not positive:", $4; exit 1 } }' rcwa_metal_drude.csv
           # --- .ofd 経路 (orcwa 内蔵ブリッジ): 1/4 波長 AR コート ---
           cp "$GITHUB_WORKSPACE/data/sample/ar_coating.ofd" .
           "$GITHUB_WORKSPACE/bin/orcwa" -n 2 ar_coating.ofd > ar.log 2>&1
