@@ -480,7 +480,14 @@ int input_data(FILE *fp)
 				RcwaLayer[NRcwaLayer].eps2 = atof(token[3]);
 				RcwaLayer[NRcwaLayer].fill = atof(token[4]);
 				RcwaLayer[NRcwaLayer].thickness = atof(token[5]);
-				/* 虚部は省略可 (後方互換)。指定時は損失を表す (exp(-iwt) → 正) */
+				/* 虚部は省略可 (後方互換)。指定時は損失を表す (exp(-iwt) → 正)。
+				   片方だけ書かれた場合 (ntoken == 7) は黙って捨てると
+				   「損失ゼロの別の構造」を解いてしまうため入力エラーにする。 */
+				if (ntoken == 7) {
+					printf("*** rcwalayer #%d: eps imaginary parts must be given"
+					       " as a pair (eps1i eps2i)\n", NRcwaLayer + 1);
+					return 1;
+				}
 				RcwaLayer[NRcwaLayer].eps1i = (ntoken > 7) ? atof(token[6]) : 0;
 				RcwaLayer[NRcwaLayer].eps2i = (ntoken > 7) ? atof(token[7]) : 0;
 				NRcwaLayer++;
