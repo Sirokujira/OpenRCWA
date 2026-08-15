@@ -1,7 +1,10 @@
 OpenRCWA 4 2
 title = RCWA sample: subwavelength grating on glass substrate
 # rcwa = <harmonics N> <period[m]>
-rcwa = 5 3.0e-7
+# N=12 (25 次数)。TM は誘電率境界で法線 E が不連続になるぶん収束が遅く、
+# N=5 では R_TM が収束値から約 1% ずれる (N=5: 0.2048 / N=20: 0.2068 @461nm)。
+# TE は N=5 でも 1e-4 精度だが、TM に合わせて N=12 にしてある。
+rcwa = 12 3.0e-7
 # rcwalayer = <eps1> <eps2> <fill> <thickness[m]>  (入射側 → 透過側)
 # 先頭と末尾は半無限層 (thickness は無視される)
 rcwalayer = 1.0 1.0 0.5 0
