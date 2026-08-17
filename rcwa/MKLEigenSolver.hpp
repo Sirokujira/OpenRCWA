@@ -102,21 +102,39 @@ public:
 template <class MatrixType>
 void MKLEigenSolver<MatrixType>::compute(const MatrixType& A)
 {
+    // 検算に落ちたら以後のソルブでは LAPACKE を試さず直接 Eigen で解く
+    // (プロセス内で粘着)。macOS/arm64 の Homebrew LAPACKE で全ソルブが
+    // 相対残差 O(1) (実測 1.96〜3.60) の壊れた固有ベクトルを返す事象があり、
+    // 毎回「壊れた zgeev + 検算 + Eigen 解き直し」を払うのは無駄なため。
+    // Eigen 経路は縮退対策の対角摂動つきで Windows が常用しており、
+    // どのソルブに対しても正しい結果を返すので、粘着させても
+    // 正しさは損なわれない (性能の判断だけを固定する)。
+    static std::atomic<bool> lapackeBroken{false};
+    if (lapackeBroken.load(std::memory_order_relaxed)) {
+        computeEigenFallback(A);
+        return;
+    }
+
     int n = A.rows();
     lapack_int info = 0;
+    // LAPACK_COL_MAJOR で呼ぶ: LAPACKE の row-major ラッパは内部で
+    // 行列全体の転置コピーとワーク領域を作る。コピーはどのみち自前で
+    // 行っているので、詰め替え時に転置して直接 col-major で渡す方が
+    // 余分な転置が消え、ラッパ層の実装差 (プラットフォーム依存の疑い)
+    // も踏まない。
     if constexpr (std::is_same_v<ScalarType, std::complex<double>>) {
         std::vector<std::complex<double>> a(n * n), w(n), vr(n * n);
         for (int i = 0; i < n; ++i)
             for (int j = 0; j < n; ++j)
-                a[i * n + j] = A(i, j);
+                a[j * n + i] = A(i, j);   // col-major 詰め替え
 
-        info = LAPACKE_zgeev(LAPACK_ROW_MAJOR, 'N', 'V', n,
+        info = LAPACKE_zgeev(LAPACK_COL_MAJOR, 'N', 'V', n,
             a.data(), n, w.data(), nullptr, n, vr.data(), n);
 
         V_.resize(n, n);
         for (int i = 0; i < n; ++i)
             for (int j = 0; j < n; ++j)
-                V_(i, j) = vr[i * n + j];
+                V_(i, j) = vr[j * n + i];   // col-major 読み出し
 
         d_.resize(n);
         for (int i = 0; i < n; ++i)
@@ -125,15 +143,15 @@ void MKLEigenSolver<MatrixType>::compute(const MatrixType& A)
         std::vector<std::complex<float>> a(n * n), w(n), vr(n * n);
         for (int i = 0; i < n; ++i)
             for (int j = 0; j < n; ++j)
-                a[i * n + j] = A(i, j);
+                a[j * n + i] = A(i, j);   // col-major 詰め替え
 
-        info = LAPACKE_cgeev(LAPACK_ROW_MAJOR, 'N', 'V', n,
+        info = LAPACKE_cgeev(LAPACK_COL_MAJOR, 'N', 'V', n,
             a.data(), n, w.data(), nullptr, n, vr.data(), n);
 
         V_.resize(n, n);
         for (int i = 0; i < n; ++i)
             for (int j = 0; j < n; ++j)
-                V_(i, j) = vr[i * n + j];
+                V_(i, j) = vr[j * n + i];   // col-major 読み出し
 
         d_.resize(n);
         for (int i = 0; i < n; ++i)
@@ -143,18 +161,14 @@ void MKLEigenSolver<MatrixType>::compute(const MatrixType& A)
     }
 
     if (info != 0 || !verified(A)) {
-        // 層・波長ごとに毎回出ると大量になるため、最初の 1 回だけ報告する。
-        // 相対残差を併記するのは、環境依存で LAPACKE が使えない場合
-        // (提供元の異なる LAPACK 本体とリンクされている等) に、
-        // 「わずかに閾値を超えた」のか「桁違いに壊れている」のかを
-        // ログだけで切り分けられるようにするため。
-        static std::atomic<bool> warned{false};
-        if (!warned.exchange(true)) {
-            std::clog << "[MKLEigenSolver] LAPACKE geev unreliable (info="
-                      << info << ", relative residual=" << relResidual(A)
-                      << " > 1e-8), falling back to Eigen solver"
-                         " (further occurrences are not reported)\n";
-        }
+        // 相対残差を併記する: 「わずかに閾値 (1e-8) を超えた」のか
+        // 「桁違いに壊れている」のかをログだけで切り分けられるようにする。
+        // 実測では macOS/arm64 で O(1) (= 出力が完全に壊れている) だった。
+        std::clog << "[MKLEigenSolver] LAPACKE geev unreliable (info="
+                  << info << ", relative residual=" << relResidual(A)
+                  << " > 1e-8); using the Eigen solver for the rest of"
+                     " this process\n";
+        lapackeBroken.store(true, std::memory_order_relaxed);
         computeEigenFallback(A);
         if (!verified(A)) {
             std::clog << "[MKLEigenSolver] warning: Eigen solver residual"
