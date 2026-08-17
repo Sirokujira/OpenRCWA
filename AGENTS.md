@@ -267,8 +267,14 @@ planewave = <theta[deg]> <phi[deg]> <pol>
     Eigen 経路は対角摂動つきで Windows が常用しており正しさは同等。
   - ログは相対残差つきで初回のみ。O(1) なら環境の LAPACKE が壊れている、
     1e-8 をわずかに超える程度なら閾値の問題、と読み分ける。
-  - macOS で col-major 化後も落ちるかは CI の build-macos ログの
-    `unreliable` の有無で確認できる (落ちていても結果は正しい)。
+  - **結論 (CI 実測 2026-08)**: col-major 化しても残差は row-major 時代と
+    **全く同じ値** (1.96334 / 3.59536) で落ちた。壊れ方はラッパ層と無関係の
+    決定的なもので、**Homebrew の LAPACKE/LAPACK 本体が macOS/arm64 で
+    壊れている**。したがって macOS は実効的に Eigen 経路で動いている
+    (粘着フォールバックにより無駄はプロセスあたり 1 ソルブのみ)。
+    Homebrew lapack のバージョンが上がったら、build-macos ログの
+    `unreliable` の有無で再評価する。CMake 構成をいじって直そうと
+    しないこと — リンク構成 (Accelerate との混在) は原因ではない。
 - C99 VLA 禁止 (MSVC 対応)。libm は `MATH_LIB` 変数経由 (MSVC では空)。
   C++ ランタイムは CMake が自動でリンクするので `stdc++` を明示しない。
 - MSVC は `/bigobj` 必須。Eigen のテンプレートを多用する翻訳単位
