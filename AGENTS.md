@@ -255,17 +255,20 @@ planewave = <theta[deg]> <phi[deg]> <pol>
   残差検算 ‖A·V−V·D‖ + Eigen 解き直しが入っている。**削除しない**。
 - `EIGEN_DONT_PARALLELIZE` は OpenMP との競合回避。外さない。
 - LAPACKE 経路は毎回 ‖A・V−V・D‖∞/‖A‖∞ ≤ 1e-8 を検算し、外れたら Eigen で
-  解き直す。**環境によっては毎回この検算に落ちる** (実測: macOS で
-  `LAPACKE geev unreliable (info=0)` が全ソルブで発生。結果は Eigen 経路で
-  正しく、R+T=1 も成立する)。原因は LAPACK 本体と LAPACKE の提供元の
-  食い違いが疑わしい (macOS の `find_package(LAPACK)` は Accelerate
-  framework を拾う一方、LAPACKE は Homebrew の `liblapacke.dylib` になる)。
-  切り分けには次を見る:
-  ```bash
-  grep -i lapacke build/CMakeCache.txt   # どのヘッダ/ライブラリを選んだか
-  otool -L bin/orcwa | grep -i "lapack\|Accelerate"   # 実際のリンク先
-  ```
-  ログは最初の 1 回だけ相対残差つきで出る (毎ソルブ出すと大量になるため)。
+  解き直す。**macOS/arm64 (Homebrew LAPACKE) ではこの検算に落ちる事象を
+  CI で実測済み**: 相対残差 1.96〜3.60 と **O(1)** で、閾値がわずかに
+  厳しいのではなく LAPACKE の返す固有ベクトルが完全に壊れている
+  (結果は Eigen 解き直しで正しくなり、R+T=1 も成立する)。
+  - 対策 1: `geev` は `LAPACK_COL_MAJOR` で呼ぶ (詰め替え時に自前で転置)。
+    row-major ラッパの内部転置を踏まず、余分なコピーも消える。
+    Linux では row-major 時代と出力がビット単位一致することを確認済み。
+  - 対策 2: 検算に一度落ちたらプロセス内で LAPACKE を諦め、以後は直接
+    Eigen で解く (粘着フォールバック)。壊れた zgeev を毎ソルブ払わない。
+    Eigen 経路は対角摂動つきで Windows が常用しており正しさは同等。
+  - ログは相対残差つきで初回のみ。O(1) なら環境の LAPACKE が壊れている、
+    1e-8 をわずかに超える程度なら閾値の問題、と読み分ける。
+  - macOS で col-major 化後も落ちるかは CI の build-macos ログの
+    `unreliable` の有無で確認できる (落ちていても結果は正しい)。
 - C99 VLA 禁止 (MSVC 対応)。libm は `MATH_LIB` 変数経由 (MSVC では空)。
   C++ ランタイムは CMake が自動でリンクするので `stdc++` を明示しない。
 - MSVC は `/bigobj` 必須。Eigen のテンプレートを多用する翻訳単位

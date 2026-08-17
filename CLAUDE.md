@@ -76,7 +76,9 @@ $OLDPWD/bin/orcwa -n 2 grating.ofd && cat rcwa_efficiency.csv
 - `EIGEN_DONT_PARALLELIZE` は OpenMP との競合回避。外さない。
 - エネルギー保存 (R+T=1) チェックを新機能でも維持する。
 - LAPACKE 経路は相対残差 ≤ 1e-8 を毎回検算し、外れたら Eigen で解き直す。
-  macOS では全ソルブでこの検算に落ちる事象を実測 (結果自体は正しい)。
+  macOS/arm64 では相対残差 O(1) で検算に落ちる事象を CI で実測
+  (結果は Eigen 解き直しで正しい)。geev は col-major で呼び、一度落ちたら
+  プロセス内は Eigen に粘着する。
   詳細と切り分け手順は `AGENTS.md` の「数値安定性」節。
 
 ## 重要な物理・実装規約
