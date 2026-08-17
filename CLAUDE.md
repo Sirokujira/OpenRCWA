@@ -130,8 +130,11 @@ $OLDPWD/bin/orcwa -n 2 grating.ofd && cat rcwa_efficiency.csv
   `lapack` ポートは lapacke.h を提供せず、`lapack-reference` ポートは
   VS 同梱 flang が LAPACK 3.12.1 の sgedmd.f90 をコンパイルできない
   (flang のバグ)。vcpkg/LLVM 側の修正が入るまで再挑戦しないこと。
-- macOS は Homebrew lapack (keg-only) の LAPACKE を明示指定
-  (Eigen フォールバックは縮退問題があるため LAPACKE を使う)。
+- macOS は Homebrew lapack (keg-only) の LAPACKE を明示指定しているが、
+  **macOS/arm64 の Homebrew LAPACKE は壊れた固有ベクトルを返す** (残差 O(1)、
+  col-major でも同値で再現 = ラッパ層は無関係と CI で確定)。検算 + 粘着
+  フォールバックにより実効的には Eigen 経路で動く。Homebrew lapack の
+  更新時に build-macos ログの `unreliable` で再評価する。
 
 ## CI
 
