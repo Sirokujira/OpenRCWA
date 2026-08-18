@@ -184,6 +184,17 @@ if (HDF5_FOUND)
       endif()
     else()
       message(STATUS "HDF5 is not built with parallel support.")
+      # mpi/solve.c と cuda_mpi/solve.cu は H5Pset_fapl_mpio /
+      # H5Pset_dxpl_mpio を直接呼ぶため、直列 HDF5 ではリンクできない。
+      # 従来はここで警告すら出さずに続行し、リンク段階で原因の分からない
+      # undefined reference になっていたので、configure 時点で止める。
+      if (WITH_MPI)
+        message(FATAL_ERROR
+          "WITH_MPI=ON には並列 HDF5 が必要ですが、見つかった HDF5 は直列版です。\n"
+          "  Ubuntu: sudo apt-get install libhdf5-openmpi-dev\n"
+          "  その後 -DHDF5_PREFER_PARALLEL=ON を付けて configure し直してください。\n"
+          "  (直列 HDF5 のままだと H5Pset_fapl_mpio 等が undefined reference になります)")
+      endif()
     endif()
 endif()
 
