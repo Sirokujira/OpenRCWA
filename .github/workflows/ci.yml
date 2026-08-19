@@ -272,16 +272,29 @@ jobs:
   # 出力が直列版とビット一致することも併せて確認する。
   build-mpi:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # 直列リファレンスと MPI 版の 2 回ビルドするぶん build-cpu より長い。
+    # apt ミラーが遅い日に 20 分では足りず、ダウンロード途中で cancel された実績あり。
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
 
       - name: Install dependencies
         run: |
+          # ミラーが不調な日にダウンロード途中で失敗しないよう再試行させる
+          echo 'Acquire::Retries "5";' | sudo tee /etc/apt/apt.conf.d/99retries
           sudo apt-get update
-          # 並列 HDF5 (libhdf5-openmpi-dev) が無いと H5Pset_fapl_mpio が未定義になる
-          sudo apt-get install -y cmake gcc g++ openmpi-bin libopenmpi-dev \
-            libhdf5-openmpi-dev python3-h5py
+          # cmake / gcc / g++ はランナーに同梱済みなので apt から入れない
+          # (apt の cmake は 11 MB あり、遅いミラーだと数分持っていかれる)。
+          # 並列 HDF5 (libhdf5-openmpi-dev) が無いと H5Pset_fapl_mpio が未定義になる。
+          # 直列リファレンス (WITH_MPI=OFF) 側は rcwa/*.cpp を常にビルドするので
+          # Eigen と LAPACK/LAPACKE、および直列 HDF5 が要る。
+          # --no-install-recommends で libcoarrays 等の不要な依存を落とす。
+          sudo apt-get install -y --no-install-recommends \
+            openmpi-bin libopenmpi-dev libhdf5-openmpi-dev \
+            libhdf5-dev liblapack-dev liblapacke-dev libeigen3-dev
+          # h5py は apt だと python3-numpy ごと Azure ミラーから引くことになるので
+          # PyPI から入れる (CDN のぶん速く、ミラー不調の影響も受けない)
+          python3 -m pip install --break-system-packages --quiet h5py
 
       - name: Configure (MPI)
         run: |
