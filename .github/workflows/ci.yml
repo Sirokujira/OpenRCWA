@@ -264,6 +264,76 @@ jobs:
             /tmp/rcwa-unit/*.log
           if-no-files-found: ignore
 
+
+  # MPI ビルドの回帰。並列 HDF5 は H5Gcreate / H5Dcreate が集団操作で、
+  # データ空間の次元が rank ごとに食い違うと H5Fclose でデッドロックする。
+  # 均等分割では顕在化しない (実測: n=2,3,5,6 は通り n=4,7 でハング) ため、
+  # プロセス数が Nx を割り切らない不均等分割を必ず含める。
+  # 出力が直列版とビット一致することも併せて確認する。
+  build-mpi:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          # 並列 HDF5 (libhdf5-openmpi-dev) が無いと H5Pset_fapl_mpio が未定義になる
+          sudo apt-get install -y cmake gcc g++ openmpi-bin libopenmpi-dev \
+            libhdf5-openmpi-dev python3-h5py
+
+      - name: Configure (MPI)
+        run: |
+          cmake -B build-mpi -DCMAKE_BUILD_TYPE=Release \
+            -DWITH_CUDA=OFF -DWITH_MPI=ON -DHDF5_PREFER_PARALLEL=ON \
+            -DWITH_RCWA=OFF -DWITH_RCWA_LEGACY_TESTS=OFF
+
+      - name: Build orcwa_mpi
+        run: cmake --build build-mpi -j"$(nproc)" --target orcwa_mpi
+
+      - name: Configure / build serial reference
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DWITH_CUDA=OFF -DWITH_MPI=OFF
+          cmake --build build -j"$(nproc)" --target orcwa
+
+      - name: Serial reference run
+        run: |
+          mkdir -p /tmp/mpi-ref && cp data/sample/dipole.ofd /tmp/mpi-ref/
+          cd /tmp/mpi-ref && "$GITHUB_WORKSPACE/bin/orcwa" -n 1 dipole.ofd
+
+      # 不均等分割 (n=4: 7,7,7,9 / n=7: 4,4,4,4,4,4,6) を含めてハングを検出する。
+      # ランナーのコア数に依らず起動できるよう --oversubscribe を付ける。
+      - name: MPI runs (even and uneven splits) + compare with serial
+        run: |
+          mkdir -p /tmp/mpi-run && cp data/sample/dipole.ofd /tmp/mpi-run/
+          cd /tmp/mpi-run
+          fail=0
+          for n in 2 3 4 7; do
+            rm -f time_series_data.h5
+            if ! timeout 300 mpirun --allow-run-as-root --oversubscribe \
+                 -n $n "$GITHUB_WORKSPACE/bin/orcwa_mpi" dipole.ofd > "n$n.log" 2>&1; then
+              echo "::error::orcwa_mpi -n $n failed or hung"
+              tail -20 "n$n.log"
+              fail=1
+              continue
+            fi
+            if ! python3 "$GITHUB_WORKSPACE/ci/compare_h5.py" \
+                 /tmp/mpi-ref/time_series_data.h5 time_series_data.h5; then
+              echo "::error::MPI output (-n $n) differs from the serial reference"
+              fail=1
+            fi
+          done
+          exit $fail
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mpi-logs
+          path: /tmp/mpi-run/*.log
+          if-no-files-found: ignore
+
   # macOS (Apple Silicon)。AppleClang は OpenMP を同梱しないため、
   # Homebrew の libomp を明示指定して find_package(OpenMP) を通す。
   # RCWA コアの固有値計算は Homebrew の lapack (keg-only) の LAPACKE を使う:

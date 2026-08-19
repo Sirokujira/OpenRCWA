@@ -293,6 +293,51 @@ planewave = <theta[deg]> <phi[deg]> <pol>
   clang++ -std=c++17 -stdlib=libc++ -fsyntax-only -I/usr/include/eigen3 -I. rcwa/*.cpp
   ```
 
+## MPI (`orcwa_mpi`) の並列 HDF5
+
+```bash
+sudo apt-get install -y openmpi-bin libopenmpi-dev libhdf5-openmpi-dev
+cmake -B build-mpi -DCMAKE_BUILD_TYPE=Release -DWITH_CUDA=OFF -DWITH_MPI=ON \
+      -DHDF5_PREFER_PARALLEL=ON -DWITH_RCWA=OFF -DWITH_RCWA_LEGACY_TESTS=OFF
+cmake --build build-mpi -j"$(nproc)" --target orcwa_mpi
+
+# 直列版と一致するか (不均等分割を必ず含める)
+mpirun --oversubscribe -n 4 bin/orcwa_mpi dipole.ofd
+python3 ci/compare_h5.py <serial>/time_series_data.h5 time_series_data.h5
+```
+
+- **`WITH_MPI=ON` には並列 HDF5 が要る**。直列 HDF5 だと `H5Pset_fapl_mpio`
+  等が undefined reference になるため、configure で FATAL_ERROR にしてある。
+- **`H5Gcreate` / `H5Dcreate` は集団操作**。`if (commRank == 0)` で囲うと
+  他 rank が `H5Fclose` (これも集団) で待ち続けてデッドロックする。
+  生の書き込み (`H5Dwrite`) だけは INDEPENDENT 転送で rank 0 に限定してよい。
+- **集団 `H5Dcreate` はデータ空間の次元が全 rank で一致していなければならない**。
+  ここが実際に踏んだ最大の罠で、rank ローカルな値を次元に使うと
+  **均等分割では顕在化せず不均等分割でだけハングする**。実測:
+  - `Surface` データセットの第 3 次元に rank ローカルの `NN`
+    (`sol/setupSize.c` の `iMax/jMax/kMax` 依存) を使っていた
+    → n=2,3,5,6 は通り **n=4 (7,7,7,9) / n=7 (4,4,4,4,4,4,6) でハング**。
+    gdb で見ると 3 rank が `H5FD_truncate`→`MPI_File_set_size`、
+    1 rank が `H5AC__run_sync_point`→`MPI_Barrier` で別々の
+    コミュニケータの集団操作を待っていた。→ 全体側の `g_NN` に修正。
+  - `metadata/Gline` の次元に `NGline` を使っていた。`Gline`/`NGline` は
+    `comm_broadcast` の対象外で rank 0 以外は 0 → データセットが 0 要素に
+    なっていた。→ `arrays[]` の各 size を rank 0 から `MPI_Bcast` して揃える。
+  - 新しいデータセットを足すときは **次元に使う変数が全 rank で同じか**を
+    必ず確認すること。
+- 場データ (E/H/P) は各 rank が自分の担当セルをグローバル添字のハイパー
+  スラブに置き、`H5FD_MPIO_COLLECTIVE` で 1 回にまとめて書く
+  (1 セルずつ書くと遅いうえ、呼び出し回数が rank ごとに変わりやすい)。
+- **給電点・観測点の波形はそのセルを持つ rank にしか溜まらない**。
+  出力前に `comm_feed()` / `comm_point()` で rank 0 へ集める
+  (これを呼び忘れていて、rank 0 が給電セルを持たない n≥4 で `IFeed` が
+  直列と 6.6e-3 ずれていた)。
+- **既知の差分**: `data%06d/P_loss` (発熱量) は直列版 (`sol/solve.c`) にしか
+  なく、MPI 版は未移植。`ci/compare_h5.py` はこれを除外している。
+- CI の `build-mpi` ジョブが n=2,3,4,7 を回し、`ci/compare_h5.py` で
+  直列版との一致 (E/H/P/Surface とメタデータは差 0、Eiter/Hiter のみ
+  総和順序ぶんの許容差) を確認する。
+
 ## 落とし穴 (Gotchas)
 
 - **Wood アノマリー**: λ が周期 Lx に一致すると回折次数がすれすれ (kz≈0)
