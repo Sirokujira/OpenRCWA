@@ -39,7 +39,7 @@ int check_gpu(int idevice, char msg[])
 	cudaDeviceProp prop;
 	ierr = cudaGetDeviceProperties(&prop, idevice);
 	if (ierr != cudaSuccess) {
-		sprintf(msg, cudaGetErrorString(ierr));
+		sprintf(msg, "%s", cudaGetErrorString(ierr));
 		return 1;
 	}
 	if (prop.major < 3) {

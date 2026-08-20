@@ -136,14 +136,30 @@ $OLDPWD/bin/orcwa -n 2 grating.ofd && cat rcwa_efficiency.csv
   フォールバックにより実効的には Eigen 経路で動く。Homebrew lapack の
   更新時に build-macos ログの `unreliable` で再評価する。
 
+## MPI (`orcwa_mpi`)
+
+- `WITH_MPI=ON` には**並列 HDF5** が要る (`libhdf5-openmpi-dev` +
+  `-DHDF5_PREFER_PARALLEL=ON`)。直列 HDF5 だと configure が FATAL_ERROR にする。
+- 並列 HDF5 では `H5Gcreate` / `H5Dcreate` は**集団操作**で、**データ空間の
+  次元が全 rank で一致していなければならない**。rank ローカルな値
+  (`NN`, `NGline` など) を次元に使うと、**均等分割では通り不均等分割
+  (n=4, n=7 など) でだけ `H5Fclose` がデッドロックする**。データセットを
+  足すときは次元に使う変数が全 rank で同じか必ず確認する。
+- 給電点・観測点の波形は担当 rank にしか溜まらないので、出力前に
+  `comm_feed()` / `comm_point()` で rank 0 に集める。
+- 既知の差分: `data%06d/P_loss` は直列版のみ (MPI 版は未移植)。
+- 検証は `ci/compare_h5.py <serial.h5> <mpi.h5>`。詳細は `AGENTS.md`。
+
 ## CI
 
-`.github/workflows/ci.yml`: Linux / macOS / Windows。
+`.github/workflows/ci.yml`: Linux / macOS / Windows / MPI。
 3 ジョブとも FDTD スモーク・RCWA grating スモークに加えて
 `test_rcwa_input` (単体) と `orcwa_rcwa` の Fresnel スモークを実行する
 (固有値の経路が Linux/macOS = LAPACKE、Windows = Eigen フォールバックと
 異なるため、3 プラットフォームで解析解との一致を確認する意味がある)。
 Linux ジョブはさらに libc++ 構文チェック (macOS 互換性の先行検出) を行う。
+`build-mpi` ジョブは MPI ビルドを不均等分割 (n=4, 7) を含めて実行し、
+`ci/compare_h5.py` で直列版と HDF5 出力が一致することを確認する。
 タグ `v*` push で Release にバイナリ添付。
 
 ## Git 運用
