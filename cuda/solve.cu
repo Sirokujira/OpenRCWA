@@ -130,9 +130,15 @@ void solve(int io, double *tdft, FILE *fp)
             average(fsum);
 
             // average (plot)
+            // Niter は格納直後に加算する。以前は収束判定の後 (下の
+            // 「Niterを増加」) で加算していたため、収束して break した
+            // 最後の 1 点が収束履歴から落ちていた (CPU / MPI / CUDA+MPI は
+            // どれも格納直後に加算しており、この実装だけがずれていた。
+            // 実測: dipole の iter が CPU の 0..550 に対し CUDA は 0..500、
+            // HDF5 の metadata/Niter も 12 に対し 11)。
             Eiter[Niter] = fsum[0];
             Hiter[Niter] = fsum[1];
-            //Niter++;
+            Niter++;
 
             // monitor
             if (io) {
@@ -328,9 +334,6 @@ void solve(int io, double *tdft, FILE *fp)
                 converged = 1;
                 break;
             }
-            
-            // Niterを増加
-            Niter++;
         }
     }
 
