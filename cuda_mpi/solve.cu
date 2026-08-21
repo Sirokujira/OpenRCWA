@@ -41,13 +41,40 @@ void solve(int io, double *tdft, FILE *fp)
     // initial field
     initfield();
 
-    // MPIコミュニケータを使用したファイルアクセスプロパティリストの作成
-    hid_t plist_id = H5Pcreate(H5P_FILE_ACCESS);
-    H5Pset_fapl_mpio(plist_id, MPI_COMM_WORLD, MPI_INFO_NULL);
+    // ── HDF5 (time_series_data.h5) は 1 プロセス実行のときだけ書く ──────
+    // この実装の HDF5 出力は、集団操作 (H5Gcreate / H5Dcreate / H5Gclose) を
+    // rank 0 だけが呼ぶ構造で、2 ランク以上では他ランクが H5Fclose / H5Fflush
+    // (これも集団) で待ち続けてデッドロックする (実測: n=1 は通り n=2 でハング)。
+    // 加えて寸法に rank 0 のローカル NN を使うので多ランクでは中身も正しくない。
+    // 直すまでは多ランク時の HDF5 出力を止めて理由を出す (黙ってハングしない)。
+    // 計算結果そのもの (.log / .out → *_post) は従来どおり出る。
+    // 全ランクで同じ判定になるので、以下の h5on 分岐は集団操作の整合を崩さない。
+    const int h5on = (commSize <= 1);
+    hid_t plist_id = -1;
+    if (h5on) {
+        // MPIコミュニケータを使用したファイルアクセスプロパティリストの作成
+        plist_id = H5Pcreate(H5P_FILE_ACCESS);
+        H5Pset_fapl_mpio(plist_id, MPI_COMM_WORLD, MPI_INFO_NULL);
 
-    // HDF5ファイルの作成 (MPI対応)
-    file_id = H5Fcreate(FILE_NAME, H5F_ACC_TRUNC, H5P_DEFAULT, plist_id);
-    H5Pclose(plist_id);
+        // HDF5ファイルの作成 (MPI対応)
+        file_id = H5Fcreate(FILE_NAME, H5F_ACC_TRUNC, H5P_DEFAULT, plist_id);
+        H5Pclose(plist_id);
+    }
+    else {
+        file_id = -1;
+        // 後段の出力関数 (sol/outputZin.c 等) は FILE_NAME を H5Fopen で開き直して
+        // 結果を追記する。ファイルが無いので失敗するが、HDF5 の API は無効な id を
+        // 受けても落ちずにエラーを返すだけ (結果は .log に出ている)。エラースタックの
+        // 大量出力だけを止める (このプロセスでは以後 HDF5 を使わない)。
+        H5Eset_auto2(H5E_DEFAULT, NULL, NULL);
+        if (commRank == 0) {
+            fprintf(stderr, "*** note: %s is not written with %d processes "
+                "(the parallel HDF5 output of this binary deadlocks with more than one rank); "
+                "run with 1 process, or use the CPU / CUDA build for the time series\n",
+                FILE_NAME, commSize);
+            fflush(stderr);
+        }
+    }
 
     // time step iteration
     int itime;
@@ -183,6 +210,10 @@ void solve(int io, double *tdft, FILE *fp)
                 // copy near3d from device to host
                 memcopy3_gpu();
 
+            }
+
+            // HDF5 : 1 プロセス実行のときだけ (上の h5on を参照)
+            if (io && h5on) {
                 // グループの作成前に同期
                 //MPI_Barrier(MPI_COMM_WORLD);
 
@@ -305,7 +336,7 @@ void solve(int io, double *tdft, FILE *fp)
     // グループの作成前に同期
     //MPI_Barrier(MPI_COMM_WORLD);
 
-    if (commRank == 0) {
+    if ((commRank == 0) && h5on) {
         // メタデータの作成
         hid_t metadata_group_id = H5Gcreate(file_id, "/metadata", H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
 
@@ -501,16 +532,18 @@ void solve(int io, double *tdft, FILE *fp)
     // グループ作成後の同期
     MPI_Barrier(MPI_COMM_WORLD);
 
-    // キャッシュをフラッシュする
-    status = H5Fflush(file_id, H5F_SCOPE_GLOBAL);
-    if (status < 0) {
-        fprintf(stderr, "Error H5Fflush\n");
-    }
+    if (h5on) {
+        // キャッシュをフラッシュする
+        status = H5Fflush(file_id, H5F_SCOPE_GLOBAL);
+        if (status < 0) {
+            fprintf(stderr, "Error H5Fflush\n");
+        }
 
-    //MPI 用に対応しているため
-    status = H5Fclose(file_id);
-    if (status < 0) {
-        fprintf(stderr, "Error H5Fclose\n");
+        //MPI 用に対応しているため
+        status = H5Fclose(file_id);
+        if (status < 0) {
+            fprintf(stderr, "Error H5Fclose\n");
+        }
     }
 
     // free

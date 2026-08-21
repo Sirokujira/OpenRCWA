@@ -68,6 +68,12 @@ subprocess として起動されます。
 
 ```sh
 cmake -B build -DCMAKE_BUILD_TYPE=Release -DWITH_CUDA=OFF -DWITH_MPI=OFF
+# CUDA / MPI 版 (orcwa_cuda / orcwa_mpi / orcwa_cuda_mpi) は FDTD 専用で、
+# RCWA 入力 (rcwalayer) は orcwa (CPU) だけが計算する (他は理由を出して終了)。
+# orcwa_cuda_mpi は 2 ランク以上では HDF5 を書かない (集団操作の不整合で
+# デッドロックしていたため、直すまで出力だけ止めている)。CUDA 13 以降は
+# -DCMAKE_CUDA_ARCHITECTURES=<実機の値> を渡す (既定は nvcc 13 以降 75)。
+# Windows (MSVC) での手順は OpenFDTD-X の docs/windows-cuda-mpi-build.md。
 cmake --build build -j       # → bin/orcwa, bin/orcwa_post
 
 # RCWA コアのテストバイナリも作る場合

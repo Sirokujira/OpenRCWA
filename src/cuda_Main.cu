@@ -10,6 +10,7 @@ solver
 #undef MAIN
 
 #include "orcwa_prototype.h"
+#include "orcwa_rcwa.h"   // NRcwaLayer (RCWA 入力の検出)
 
 static void args(int, char *[], int *, int *, char [], char []);
 static void error_check(int, int);
@@ -51,6 +52,15 @@ int main(int argc, char *argv[])
 			ierr = input_data(fp_in);
 			fclose(fp_in);
 		}
+	}
+
+	// RCWA 入力 (rcwalayer) を計算できるのは RCWA コアに結線された orcwa (CPU)
+	// だけ。この実装は FDTD 専用なので、メッシュ 0 のまま走って落ちる前に
+	// 理由を出して終了する (実機 GPU で 0xC0000005 になることを確認済み)。
+	if (io && !ierr && (NRcwaLayer > 0)) {
+		fprintf(stderr, "*** RCWA input (rcwalayer) is supported by orcwa (CPU) only. Run orcwa instead of this binary.\n");
+		fflush(stderr);
+		ierr = 1;
 	}
 	error_check(ierr, prompt);
 
