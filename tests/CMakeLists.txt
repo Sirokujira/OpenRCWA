@@ -14,7 +14,12 @@ else()
 endif()
 
 
-if (BUILD_GPU)
+# GPU 版 RCWA のテスト (test_gpu / test_metasurface_gpu / test_oe_model_gpu /
+# test_gds_gpu) は gdstk/ と core/ に依存する (下の旧世代テストと同じ理由で
+# Windows ではリンクできない) うえ、cuSOLVER / cuBLAS / MAGMA を要求する。
+# orcwa_cuda (FDTD の CUDA 版) には不要なので、旧世代テストと同じスイッチで
+# 切り離す (MSVC では既定 OFF)。
+if (BUILD_GPU AND WITH_RCWA_LEGACY_TESTS)
   add_exe(test_gpu
       test_gpu.cpp
       ${RCWA_SRC_FILES}
