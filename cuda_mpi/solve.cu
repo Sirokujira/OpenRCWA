@@ -44,10 +44,57 @@ void solve(int io, double *tdft, FILE *fp)
     // MPIコミュニケータを使用したファイルアクセスプロパティリストの作成
     hid_t plist_id = H5Pcreate(H5P_FILE_ACCESS);
     H5Pset_fapl_mpio(plist_id, MPI_COMM_WORLD, MPI_INFO_NULL);
+    /* メタデータ操作を集団化する。これを入れないと rank ごとにメタデータ
+       キャッシュの状態がずれ、H5Fclose の内部で一部の rank が
+       H5AC__run_sync_point の MPI_Barrier、残りが H5FD_truncate の
+       MPI_File_set_size と別々の集団操作で待ち合ってハングする
+       (実測: n<=3 では表面化せず n=4 で発生)。 */
+    H5Pset_all_coll_metadata_ops(plist_id, 1);
+    H5Pset_coll_metadata_write(plist_id, 1);
 
     // HDF5ファイルの作成 (MPI対応)
     file_id = H5Fcreate(FILE_NAME, H5F_ACC_TRUNC, H5P_DEFAULT, plist_id);
     H5Pclose(plist_id);
+
+    /* ── 並列 HDF5 書き込み用のグローバル添字パラメータ ──────────────
+       局所配列は袖 (halo/PML) を含む [iMin-l, iMax+l] を覆い、NA(i,j,k) で
+       0..NN-1 に平坦化される (Nk=1 なので k 方向が連続)。HDF5 には直列実行時
+       と同じ全体配列 (g_NN 要素) を書きたいので、setupSize と同じ式で全体側の
+       Ni/Nj/Nk/N0 を求めておく (グローバル変数は書き換えない)。 */
+    const int l_x = (iABC == 0) ? 1 : (iABC == 1) ? cPML.l : 0;
+    const int l_y = l_x;
+    const int l_z = l_x;
+    const int64_t g_Nk = 1;
+    const int64_t g_Nj = (int64_t)(Nz + 2 * l_z + 1);
+    const int64_t g_Ni = (int64_t)(Ny + 2 * l_y + 1) * g_Nj;
+    const int64_t g_N0 = -(((int64_t)(0 - l_x) * g_Ni)
+                         + ((int64_t)(0 - l_y) * g_Nj)
+                         + ((int64_t)(0 - l_z) * g_Nk));
+    const int64_t g_NN = ((int64_t)(Nx + l_x) * g_Ni)
+                       + ((int64_t)(Ny + l_y) * g_Nj)
+                       + ((int64_t)(Nz + l_z) * g_Nk) + g_N0 + 1;
+
+    /* 各 rank の担当範囲 (グローバル添字, 両端含む)。
+       重複書き込みは MPI-IO では未定義動作なので、内部 rank は自分のコア
+       [iMin, iMax-1] のみ、領域端の rank だけ袖まで広げる。こうすると全体を
+       過不足なくちょうど 1 回ずつ覆う。 */
+    const int w_i0 = (Ipx == 0)       ? (0  - l_x) : iMin;
+    const int w_i1 = (Ipx == Npx - 1) ? (Nx + l_x) : (iMax - 1);
+    const int w_j0 = (Ipy == 0)       ? (0  - l_y) : jMin;
+    const int w_j1 = (Ipy == Npy - 1) ? (Ny + l_y) : (jMax - 1);
+    const int w_k0 = (Ipz == 0)       ? (0  - l_z) : kMin;
+    const int w_k1 = (Ipz == Npz - 1) ? (Nz + l_z) : (kMax - 1);
+
+    /* 担当範囲のセル数 (集団書き込みのバッファ長に使う) */
+    const int64_t w_ni    = (int64_t)(w_i1 - w_i0 + 1);
+    const int64_t w_nj    = (int64_t)(w_j1 - w_j0 + 1);
+    const int64_t w_nk    = (int64_t)(w_k1 - w_k0 + 1);
+    const int64_t w_ncell = w_ni * w_nj * w_nk;
+    /* y/z 方向が分割されていない (担当が全範囲) なら、担当セルは平坦添字上で
+       連続になる。既定の分割は x のみ (Npy=Npz=1) なので通常こちらを通る。 */
+    const int w_full_jk = ((w_j0 == (0 - l_y)) && (w_j1 == (Ny + l_y))
+                        && (w_k0 == (0 - l_z)) && (w_k1 == (Nz + l_z)));
+
 
     // time step iteration
     int itime;
@@ -179,99 +226,179 @@ void solve(int io, double *tdft, FILE *fp)
                 fprintf(stdout, "%s\n", str);
                 fflush(fp);
                 fflush(stdout);
-                
-                // copy near3d from device to host
-                memcopy3_gpu();
+            }
 
+            /* DFT の結果を device から host へ。集団書き込みでは全 rank が
+               自分の担当範囲を書くので、rank 0 だけコピーしたのでは足りない
+               (以前は if (io) の中で呼んでおり、非 rank 0 は未初期化の host
+                配列を書いていた)。 */
+            if (GPU) cudaDeviceSynchronize();
+            memcopy3_gpu();
+
+            /* HDF5 出力は全 rank が実行する。並列 HDF5 (H5Pset_fapl_mpio で
+               作成したファイル) では H5Gcreate / H5Dcreate は集団操作であり、
+               rank 0 だけで呼ぶと他 rank が H5Fclose (これも集団) で待ち続けて
+               デッドロックする (実測: n=1 は通り n>=2 でハング)。
+               書き込む中身は各 rank が自分の担当範囲だけをグローバル添字で置く。 */
+            {
                 // グループの作成前に同期
                 //MPI_Barrier(MPI_COMM_WORLD);
-
                 // 各時間ステップごとにグループを作成
                 char group_name[32];
                 snprintf(group_name, sizeof(group_name), "/data%06d", itime);
                 group_id = H5Gcreate(file_id, group_name, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-                //sprintf(str, "group_name : %s", group_name);
-                //fprintf(stdout, "%s\n", str);
 
                 // Eフィールドデータセットの作成と書き込み
-                hsize_t e_dims[4] = {1, NFreq2, NN, 6};
+                hsize_t e_dims[4] = {1, NFreq2, g_NN, 6};
                 dataspace_id = H5Screate_simple(4, e_dims, NULL);
                 dataset_id = H5Dcreate(group_id, "E", H5T_NATIVE_DOUBLE, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+                /* 集団書き込み: 全 rank が同じ回数だけ H5Dwrite を呼ぶ。
+                   1 セルずつ独立書き込みしていた旧実装は、不均等分割だと
+                   rank ごとに呼び出し回数が変わり、HDF5 内部のメタデータ
+                   キャッシュ同期がずれて H5Fclose でハングした
+                   (実測: 均等分割の n=2,3,5,6 は通り n=4,7 でハング)。
+                   自 rank の担当セルは (i,j) ごとに k 方向が連続なので、
+                   その run を OR で足し合わせて 1 回で書く。 */
+                {
+                    const int64_t nsel = w_ncell * 6;
+                    double *buf = (double *)malloc((size_t)nsel * sizeof(double));
+                    hsize_t mdims[1] = {(hsize_t)nsel};
+                    hid_t mspace = H5Screate_simple(1, mdims, NULL);
+                    hid_t dxpl = H5Pcreate(H5P_DATASET_XFER);
+                    H5Pset_dxpl_mpio(dxpl, H5FD_MPIO_COLLECTIVE);
 
-                // 書き込み用のメモリスペースを修正
-                hsize_t mem_dims[1] = {6};
-                memspace_id = H5Screate_simple(1, mem_dims, NULL);
+                    for (int ifreq = 0; ifreq < NFreq2; ifreq++) {
+                        int64_t n0 = ifreq * NN;
 
-                //sprintf(str, "NFreq2 : %d", NFreq2);
-                //fprintf(stdout, "%s\n", str);
+                        /* ファイル側の選択 (自 rank の担当セル)。
+                           y/z を分割していない (既定の x 方向のみ分割) 場合、
+                           担当セルは平坦添字上で単一の連続ブロックになるので
+                           1 個のハイパースラブで表せる。多数のブロックを OR で
+                           繋いだ不規則な選択にすると、HDF5 内部の集団 I/O 判定が
+                           rank ごとに分岐しうるため、可能な限り単純にする。 */
+                        H5Sselect_none(dataspace_id);
+                        if (w_full_jk) {
+                            const int64_t g_beg = ((int64_t)w_i0 * g_Ni) + ((int64_t)w_j0 * g_Nj)
+                                                + ((int64_t)w_k0 * g_Nk) + g_N0;
+                            hsize_t st[4] = {0, (hsize_t)ifreq, (hsize_t)g_beg, 0};
+                            hsize_t ct[4] = {1, 1, (hsize_t)(w_ni * g_Ni), 6};
+                            H5Sselect_hyperslab(dataspace_id, H5S_SELECT_SET, st, NULL, ct, NULL);
+                        } else {
+                        for (int gi = w_i0; gi <= w_i1; gi++) {
+                        for (int gj = w_j0; gj <= w_j1; gj++) {
+                            const int64_t g_run = ((int64_t)gi * g_Ni) + ((int64_t)gj * g_Nj)
+                                                + ((int64_t)w_k0 * g_Nk) + g_N0;
+                            hsize_t st[4] = {0, (hsize_t)ifreq, (hsize_t)g_run, 0};
+                            hsize_t ct[4] = {1, 1, (hsize_t)w_nk, 6};
+                            H5Sselect_hyperslab(dataspace_id, H5S_SELECT_OR, st, NULL, ct, NULL);
+                        }
+                        }
+                        }
 
-                for (int ifreq = 0; ifreq < NFreq2; ifreq++) {
-                    int64_t n0 = ifreq * NN;
-                    for (int nn = 0; nn < NN; nn++) {
-                        //fprintf(stdout, "set e_value.\n");
-
-                        double e_value[6] = {
+                        /* メモリ側は選択と同じ (i,j,k) 順に詰める */
+                        int64_t q = 0;
+                        for (int gi = w_i0; gi <= w_i1; gi++) {
+                        for (int gj = w_j0; gj <= w_j1; gj++) {
+                        for (int gk = w_k0; gk <= w_k1; gk++) {
+                            const int64_t nn = ((int64_t)gi * Ni) + ((int64_t)gj * Nj)
+                                             + ((int64_t)gk * Nk) + N0;
+                            const double v[6] = {
                             cEx_r[n0 + nn], cEy_r[n0 + nn], cEz_r[n0 + nn],
                             cEx_i[n0 + nn], cEy_i[n0 + nn], cEz_i[n0 + nn]
-                        };
-
-                        hsize_t e_offset[4] = {0, ifreq, nn, 0};
-                        hsize_t e_count[4] = {1, 1, 1, 6};
-                        //fprintf(stdout, "H5Sselect_hyperslab.\n");
-                        H5Sselect_hyperslab(dataspace_id, H5S_SELECT_SET, e_offset, NULL, e_count, NULL);
-
-                        // 書き込み
-                        //fprintf(stdout, "H5Dwrite.\n");
-                        // データ書き込み (MPI対応)
-                        plist_id = H5Pcreate(H5P_DATASET_XFER);
-                        H5Pset_dxpl_mpio(plist_id, H5FD_MPIO_INDEPENDENT);  // H5FD_MPIO_COLLECTIVE または H5FD_MPIO_INDEPENDENT
-                        status = H5Dwrite(dataset_id, H5T_NATIVE_DOUBLE, memspace_id, dataspace_id, plist_id, e_value);
-                        if (status < 0) {
-                            fprintf(stderr, "Error writing E data at itime=%d, ifreq=%d, nn=%d\n", itime, ifreq, nn);
+                            };
+                            for (int c = 0; c < 6; c++) buf[q++] = v[c];
                         }
-                        H5Pclose(plist_id);
+                        }
+                        }
+
+                        status = H5Dwrite(dataset_id, H5T_NATIVE_DOUBLE, mspace, dataspace_id, dxpl, buf);
+                        if (status < 0) {
+                            fprintf(stderr, "Error writing E data at itime=%d, ifreq=%d\n", itime, ifreq);
+                        }
                     }
+                    H5Pclose(dxpl);
+                    H5Sclose(mspace);
+                    free(buf);
                 }
                 H5Dclose(dataset_id);
                 H5Sclose(dataspace_id);
 
                 // Hフィールドデータセットの作成と書き込み
-                hsize_t h_dims[4] = {1, NFreq2, NN, 6};
+                hsize_t h_dims[4] = {1, NFreq2, g_NN, 6};
                 dataspace_id = H5Screate_simple(4, h_dims, NULL);
                 dataset_id = H5Dcreate(group_id, "H", H5T_NATIVE_DOUBLE, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+                /* 集団書き込み: 全 rank が同じ回数だけ H5Dwrite を呼ぶ。
+                   1 セルずつ独立書き込みしていた旧実装は、不均等分割だと
+                   rank ごとに呼び出し回数が変わり、HDF5 内部のメタデータ
+                   キャッシュ同期がずれて H5Fclose でハングした
+                   (実測: 均等分割の n=2,3,5,6 は通り n=4,7 でハング)。
+                   自 rank の担当セルは (i,j) ごとに k 方向が連続なので、
+                   その run を OR で足し合わせて 1 回で書く。 */
+                {
+                    const int64_t nsel = w_ncell * 6;
+                    double *buf = (double *)malloc((size_t)nsel * sizeof(double));
+                    hsize_t mdims[1] = {(hsize_t)nsel};
+                    hid_t mspace = H5Screate_simple(1, mdims, NULL);
+                    hid_t dxpl = H5Pcreate(H5P_DATASET_XFER);
+                    H5Pset_dxpl_mpio(dxpl, H5FD_MPIO_COLLECTIVE);
 
-                for (int ifreq = 0; ifreq < NFreq2; ifreq++) {
-                    int64_t n0 = ifreq * NN;
-                    for (int nn = 0; nn < NN; nn++) {
-                        double h_value[6] = {
-                            cHx_r[n0 + nn], cHy_r[n0 + nn], cEz_r[n0 + nn],
-                            cHx_i[n0 + nn], cHy_i[n0 + nn], cHz_i[n0 + nn]
-                        };
+                    for (int ifreq = 0; ifreq < NFreq2; ifreq++) {
+                        int64_t n0 = ifreq * NN;
 
-                        hsize_t h_offset[4] = {0, ifreq, nn, 0};
-                        hsize_t h_count[4] = {1, 1, 1, 6};
-                        H5Sselect_hyperslab(dataspace_id, H5S_SELECT_SET, h_offset, NULL, h_count, NULL);
-                        
-                        // データ書き込み (MPI対応)
-                        plist_id = H5Pcreate(H5P_DATASET_XFER);
-                        H5Pset_dxpl_mpio(plist_id, H5FD_MPIO_INDEPENDENT);  // または H5FD_MPIO_INDEPENDENT
-                        status = H5Dwrite(dataset_id, H5T_NATIVE_DOUBLE, memspace_id, dataspace_id, plist_id, h_value);
-                        if (status < 0) {
-                            fprintf(stderr, "Error writing H data at itime=%d, ifreq=%d, nn=%d\n", itime, ifreq, nn);
+                        /* ファイル側の選択 (自 rank の担当セル)。
+                           y/z を分割していない (既定の x 方向のみ分割) 場合、
+                           担当セルは平坦添字上で単一の連続ブロックになるので
+                           1 個のハイパースラブで表せる。多数のブロックを OR で
+                           繋いだ不規則な選択にすると、HDF5 内部の集団 I/O 判定が
+                           rank ごとに分岐しうるため、可能な限り単純にする。 */
+                        H5Sselect_none(dataspace_id);
+                        if (w_full_jk) {
+                            const int64_t g_beg = ((int64_t)w_i0 * g_Ni) + ((int64_t)w_j0 * g_Nj)
+                                                + ((int64_t)w_k0 * g_Nk) + g_N0;
+                            hsize_t st[4] = {0, (hsize_t)ifreq, (hsize_t)g_beg, 0};
+                            hsize_t ct[4] = {1, 1, (hsize_t)(w_ni * g_Ni), 6};
+                            H5Sselect_hyperslab(dataspace_id, H5S_SELECT_SET, st, NULL, ct, NULL);
+                        } else {
+                        for (int gi = w_i0; gi <= w_i1; gi++) {
+                        for (int gj = w_j0; gj <= w_j1; gj++) {
+                            const int64_t g_run = ((int64_t)gi * g_Ni) + ((int64_t)gj * g_Nj)
+                                                + ((int64_t)w_k0 * g_Nk) + g_N0;
+                            hsize_t st[4] = {0, (hsize_t)ifreq, (hsize_t)g_run, 0};
+                            hsize_t ct[4] = {1, 1, (hsize_t)w_nk, 6};
+                            H5Sselect_hyperslab(dataspace_id, H5S_SELECT_OR, st, NULL, ct, NULL);
                         }
-                        H5Pclose(plist_id);
+                        }
+                        }
+
+                        /* メモリ側は選択と同じ (i,j,k) 順に詰める */
+                        int64_t q = 0;
+                        for (int gi = w_i0; gi <= w_i1; gi++) {
+                        for (int gj = w_j0; gj <= w_j1; gj++) {
+                        for (int gk = w_k0; gk <= w_k1; gk++) {
+                            const int64_t nn = ((int64_t)gi * Ni) + ((int64_t)gj * Nj)
+                                             + ((int64_t)gk * Nk) + N0;
+                            const double v[6] = {
+                            cHx_r[n0 + nn], cHy_r[n0 + nn], cHz_r[n0 + nn],
+                            cHx_i[n0 + nn], cHy_i[n0 + nn], cHz_i[n0 + nn]
+                            };
+                            for (int c = 0; c < 6; c++) buf[q++] = v[c];
+                        }
+                        }
+                        }
+
+                        status = H5Dwrite(dataset_id, H5T_NATIVE_DOUBLE, mspace, dataspace_id, dxpl, buf);
+                        if (status < 0) {
+                            fprintf(stderr, "Error writing H data at itime=%d, ifreq=%d\n", itime, ifreq);
+                        }
                     }
+                    H5Pclose(dxpl);
+                    H5Sclose(mspace);
+                    free(buf);
                 }
                 H5Dclose(dataset_id);
                 H5Sclose(dataspace_id);
-
                 // グループのクローズ
                 H5Gclose(group_id);
-                
-                // グループ作成後の同期
-                //MPI_Barrier(MPI_COMM_WORLD);
-                // メモリスペース、データセットとデータスペースのクローズ
-                status = H5Sclose(memspace_id);
             }
 
             // check convergence
@@ -303,14 +430,42 @@ void solve(int io, double *tdft, FILE *fp)
     }
 
     // グループの作成前に同期
-    //MPI_Barrier(MPI_COMM_WORLD);
+    MPI_Barrier(MPI_COMM_WORLD);
 
-    if (commRank == 0) {
+    /* 集団 H5Dcreate は全 rank でデータ空間の次元が一致していなければ
+       ならない。Niter は rank 0 でしか加算されず (average の後段)、
+       NSurface も rank ごとに異なりうるため、そのままだと Eiter/Hiter 等の
+       次元が食い違って集団呼び出しが噛み合わずハングする。
+       メタデータを書く前に rank 0 の値へ揃えておく。 */
+#ifdef _MPI
+    if (commSize > 1) {
+        MPI_Bcast(&Niter,    1, MPI_INT, 0, MPI_COMM_WORLD);
+        MPI_Bcast(&NSurface, 1, MPI_INT, 0, MPI_COMM_WORLD);
+        MPI_Bcast(&Ntime,    1, MPI_INT, 0, MPI_COMM_WORLD);
+
+        /* 給電点・観測点の波形は、そのセルを担当する rank にしか溜まらない。
+           rank 0 が担当していない分割では IFeed/VFeed/VPoint が空のまま
+           出力されるため (実測: n=2 は rank 0 が給電セルを持つので一致、
+           n=4/7 では IFeed が直列と 6.6e-3 ずれる)、ここで rank 0 に集める。
+           comm_feed/comm_point は用意されていたが呼ばれていなかった。
+           内部で MPI_Barrier を使うので全 rank が通ること。 */
+        comm_feed();
+        comm_point();
+    }
+#endif
+
+    /* 並列 HDF5 では H5Gcreate / H5Dcreate は集団操作であり、全 rank が
+       同じ順序で呼ぶ必要がある。ここを if (commRank == 0) で囲うと rank 0 が
+       集団呼び出しに入る一方、他 rank は後段の H5Fclose (これも集団) で待ち
+       続けデッドロックする (実測: n=1 は通り n>=2 でハング)。
+       メタデータは全 rank で同一なので、作成・クローズは全 rank で行い、
+       実データの書き込みだけを INDEPENDENT 転送で rank 0 に限定する。 */
+    {
         // メタデータの作成
         hid_t metadata_group_id = H5Gcreate(file_id, "/metadata", H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
 
         //sprintf(str, "group_name : %s", group_name);
-        fprintf(stdout, "meta1.\n");
+        //fprintf(stdout, "meta1.\n");
 
         // 時間に関するメタデータの書き込み
         double time_metadata[1] = {Solver.maxiter * Dt};
@@ -319,10 +474,12 @@ void solve(int io, double *tdft, FILE *fp)
         dataspace_id = H5Screate_simple(1, time_count, NULL);
         dataset_id = H5Dcreate(metadata_group_id, "time", H5T_NATIVE_DOUBLE, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
         // データ書き込み (MPI対応)
-        plist_id = H5Pcreate(H5P_DATASET_XFER);
-        H5Pset_dxpl_mpio(plist_id, H5FD_MPIO_INDEPENDENT);  // または H5FD_MPIO_INDEPENDENT
-        status = H5Dwrite(dataset_id, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, plist_id, time_metadata);
-        H5Pclose(plist_id);
+        if (commRank == 0) {   /* 書き込みは rank 0 のみ */
+            plist_id = H5Pcreate(H5P_DATASET_XFER);
+            H5Pset_dxpl_mpio(plist_id, H5FD_MPIO_INDEPENDENT);  // または H5FD_MPIO_INDEPENDENT
+            status = H5Dwrite(dataset_id, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, plist_id, time_metadata);
+            H5Pclose(plist_id);
+        }
         H5Dclose(dataset_id);
         H5Sclose(dataspace_id);
 
@@ -343,20 +500,29 @@ void solve(int io, double *tdft, FILE *fp)
         //H5Sclose(dataspace_id);
 
         // Title
-        fprintf(stdout, "meta2.\n");
         hsize_t title_dims[1] = {256};
         dataspace_id = H5Screate_simple(1, title_dims, NULL);
         dataset_id = H5Dcreate(metadata_group_id, "Title", H5T_NATIVE_CHAR, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
         // データ書き込み (MPI対応)
-        plist_id = H5Pcreate(H5P_DATASET_XFER);
-        H5Pset_dxpl_mpio(plist_id, H5FD_MPIO_INDEPENDENT);  // または H5FD_MPIO_INDEPENDENT
-        status = H5Dwrite(dataset_id, H5T_NATIVE_CHAR, H5S_ALL, H5S_ALL, plist_id, Title);
-        H5Pclose(plist_id);
+        if (commRank == 0) {   /* 書き込みは rank 0 のみ */
+            plist_id = H5Pcreate(H5P_DATASET_XFER);
+            H5Pset_dxpl_mpio(plist_id, H5FD_MPIO_INDEPENDENT);  // または H5FD_MPIO_INDEPENDENT
+            status = H5Dwrite(dataset_id, H5T_NATIVE_CHAR, H5S_ALL, H5S_ALL, plist_id, Title);
+            H5Pclose(plist_id);
+        }
         H5Dclose(dataset_id);
         H5Sclose(dataspace_id);
 
-        fprintf(stdout, "meta3.\n");
         // 各種整数型メタデータの書き込み
+        /* metadata[] は void* を取るので、全体側の値を同じ型の実体に置く。
+           E/H/P を全体配列として書いている以上、その形状パラメータも
+           全体側でなければファイルの自己整合性が壊れる。 */
+        int           m_Ni = (int)g_Ni;
+        int           m_Nj = (int)g_Nj;
+        int           m_Nk = (int)g_Nk;
+        int           m_N0 = (int)g_N0;
+        int64_t       m_NN = g_NN;
+
         struct {
             const char *name;
             void *value;
@@ -365,11 +531,15 @@ void solve(int io, double *tdft, FILE *fp)
             {"Nx", &Nx, H5T_NATIVE_INT},
             {"Ny", &Ny, H5T_NATIVE_INT},
             {"Nz", &Nz, H5T_NATIVE_INT},
-            {"Ni", &Ni, H5T_NATIVE_INT},
-            {"Nj", &Nj, H5T_NATIVE_INT},
-            {"Nk", &Nk, H5T_NATIVE_INT},
-            {"N0", &N0, H5T_NATIVE_INT},
-            {"NN", &NN, H5T_NATIVE_INT64},
+            /* E/H/P は全体配列 (g_NN 要素) として書いているので、その添字を
+               解釈するためのパラメータも全体側の値を書く。局所値 (Ni/Nj/...) を
+               書くと rank 0 の部分領域の形状になり、ファイルの自己整合性が
+               壊れる (直列実行時の出力と解釈が食い違う)。 */
+            {"Ni", &m_Ni, H5T_NATIVE_INT},
+            {"Nj", &m_Nj, H5T_NATIVE_INT},
+            {"Nk", &m_Nk, H5T_NATIVE_INT},
+            {"N0", &m_N0, H5T_NATIVE_INT},
+            {"NN", &m_NN, H5T_NATIVE_INT64},
             {"NFreq1", &NFreq1, H5T_NATIVE_INT},
             {"NFreq2", &NFreq2, H5T_NATIVE_INT},
             {"NFeed", &NFeed, H5T_NATIVE_INT},
@@ -386,38 +556,41 @@ void solve(int io, double *tdft, FILE *fp)
             dataspace_id = H5Screate(H5S_SCALAR);
             dataset_id = H5Dcreate(metadata_group_id, metadata[i].name, metadata[i].type, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
             // データ書き込み (MPI対応)
-            plist_id = H5Pcreate(H5P_DATASET_XFER);
-            H5Pset_dxpl_mpio(plist_id, H5FD_MPIO_INDEPENDENT);  // または H5FD_MPIO_INDEPENDENT
-            status = H5Dwrite(dataset_id, metadata[i].type, H5S_ALL, H5S_ALL, plist_id, metadata[i].value);
-            H5Pclose(plist_id);
+            if (commRank == 0) {   /* 書き込みは rank 0 のみ */
+                plist_id = H5Pcreate(H5P_DATASET_XFER);
+                H5Pset_dxpl_mpio(plist_id, H5FD_MPIO_INDEPENDENT);  // または H5FD_MPIO_INDEPENDENT
+                status = H5Dwrite(dataset_id, metadata[i].type, H5S_ALL, H5S_ALL, plist_id, metadata[i].value);
+                H5Pclose(plist_id);
+            }
             H5Dclose(dataset_id);
             H5Sclose(dataspace_id);
         }
 
-        fprintf(stdout, "meta4.\n");
         // Dtの書き込み
         dataspace_id = H5Screate(H5S_SCALAR);
         dataset_id = H5Dcreate(metadata_group_id, "Dt", H5T_NATIVE_DOUBLE, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-        plist_id = H5Pcreate(H5P_DATASET_XFER);
-        H5Pset_dxpl_mpio(plist_id, H5FD_MPIO_INDEPENDENT);  // または H5FD_MPIO_INDEPENDENT
-        status = H5Dwrite(dataset_id, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, plist_id, &Dt);
-        H5Pclose(plist_id);
+        if (commRank == 0) {   /* 書き込みは rank 0 のみ */
+            plist_id = H5Pcreate(H5P_DATASET_XFER);
+            H5Pset_dxpl_mpio(plist_id, H5FD_MPIO_INDEPENDENT);  // または H5FD_MPIO_INDEPENDENT
+            status = H5Dwrite(dataset_id, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, plist_id, &Dt);
+            H5Pclose(plist_id);
+        }
         H5Dclose(dataset_id);
         H5Sclose(dataspace_id);
 
-        fprintf(stdout, "meta5.\n");
         // Planewaveの書き込み
         dataspace_id = H5Screate(H5S_SCALAR);
         dataset_id = H5Dcreate(metadata_group_id, "Planewave", H5T_NATIVE_DOUBLE, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
         // データ書き込み (MPI対応)
-        plist_id = H5Pcreate(H5P_DATASET_XFER);
-        H5Pset_dxpl_mpio(plist_id, H5FD_MPIO_INDEPENDENT);  // または H5FD_MPIO_INDEPENDENT
-        status = H5Dwrite(dataset_id, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, plist_id, &Planewave);
-        H5Pclose(plist_id);
+        if (commRank == 0) {   /* 書き込みは rank 0 のみ */
+            plist_id = H5Pcreate(H5P_DATASET_XFER);
+            H5Pset_dxpl_mpio(plist_id, H5FD_MPIO_INDEPENDENT);  // または H5FD_MPIO_INDEPENDENT
+            status = H5Dwrite(dataset_id, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, plist_id, &Planewave);
+            H5Pclose(plist_id);
+        }
         H5Dclose(dataset_id);
         H5Sclose(dataspace_id);
 
-        fprintf(stdout, "meta6.\n");
         // 配列データの書き込み
         struct {
             const char *name;
@@ -440,36 +613,52 @@ void solve(int io, double *tdft, FILE *fp)
             {"Gline", reinterpret_cast<double*>(Gline), NGline * 2 * 3}
         };
 
+        /* 集団操作である H5Dcreate は全 rank で次元が一致していなければ
+           ならない。NGline は rank 0 でしか計算されず (Gline は
+           comm_broadcast の対象外)、そのままだと rank ごとに違う次元で
+           H5Dcreate を呼ぶことになり、データセットが 0 要素になったり
+           H5Fclose でデッドロックしたりする。書き込むのは rank 0 だけ
+           なので、次元だけ rank 0 の値へ揃える。 */
+#ifdef _MPI
+        if (commSize > 1) {
+            const int narray = (int)(sizeof(arrays) / sizeof(arrays[0]));
+            int64_t asize[sizeof(arrays) / sizeof(arrays[0])];
+            for (int i = 0; i < narray; i++) asize[i] = (int64_t)arrays[i].size;
+            MPI_Bcast(asize, narray, MPI_INT64_T, 0, MPI_COMM_WORLD);
+            for (int i = 0; i < narray; i++) arrays[i].size = (size_t)asize[i];
+        }
+#endif
+
         for (int i = 0; i < sizeof(arrays) / sizeof(arrays[0]); i++) {
-            fprintf(stdout, "meta6 1(%d)(%s).\n", i, arrays[i].name);
             hsize_t array_dims[1] = {arrays[i].size};
             dataspace_id = H5Screate_simple(1, array_dims, NULL);
             dataset_id = H5Dcreate(metadata_group_id, arrays[i].name, H5T_NATIVE_DOUBLE, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
 
             // データ書き込み (MPI対応)
-            plist_id = H5Pcreate(H5P_DATASET_XFER);
-            H5Pset_dxpl_mpio(plist_id, H5FD_MPIO_INDEPENDENT);  // または H5FD_MPIO_INDEPENDENT
-            status = H5Dwrite(dataset_id, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, plist_id, arrays[i].data);
-            H5Pclose(plist_id);
+            if (commRank == 0) {   /* 書き込みは rank 0 のみ */
+                plist_id = H5Pcreate(H5P_DATASET_XFER);
+                H5Pset_dxpl_mpio(plist_id, H5FD_MPIO_INDEPENDENT);  // または H5FD_MPIO_INDEPENDENT
+                status = H5Dwrite(dataset_id, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, plist_id, arrays[i].data);
+                H5Pclose(plist_id);
+            }
             H5Dclose(dataset_id);
             H5Sclose(dataspace_id);
         }
         
-        fprintf(stdout, "meta7.\n");
         // Surfaceデータの書き込み
         dataspace_id = H5Screate(H5S_SCALAR);
         dataset_id = H5Dcreate(metadata_group_id, "NSurface", H5T_NATIVE_INT, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
         
         // データ書き込み (MPI対応)
-        plist_id = H5Pcreate(H5P_DATASET_XFER);
-        H5Pset_dxpl_mpio(plist_id, H5FD_MPIO_INDEPENDENT);  // または H5FD_MPIO_INDEPENDENT
-        status = H5Dwrite(dataset_id, H5T_NATIVE_INT, H5S_ALL, H5S_ALL, plist_id, &NSurface);
-        H5Pclose(plist_id);
+        if (commRank == 0) {   /* 書き込みは rank 0 のみ */
+            plist_id = H5Pcreate(H5P_DATASET_XFER);
+            H5Pset_dxpl_mpio(plist_id, H5FD_MPIO_INDEPENDENT);  // または H5FD_MPIO_INDEPENDENT
+            status = H5Dwrite(dataset_id, H5T_NATIVE_INT, H5S_ALL, H5S_ALL, plist_id, &NSurface);
+            H5Pclose(plist_id);
+        }
         H5Dclose(dataset_id);
         H5Sclose(dataspace_id);
 
-        fprintf(stdout, "meta8.\n");
-	    // surface_t構造体に対応する複合データ型を定義
 	    hid_t memtype = H5Tcreate(H5T_COMPOUND, sizeof(surface_t));
 	    H5Tinsert(memtype, "nx", HOFFSET(surface_t, nx), H5T_NATIVE_DOUBLE);
 	    H5Tinsert(memtype, "ny", HOFFSET(surface_t, ny), H5T_NATIVE_DOUBLE);
@@ -484,19 +673,20 @@ void solve(int io, double *tdft, FILE *fp)
         dataset_id = H5Dcreate(metadata_group_id, "Surface", memtype, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
 
         // データ書き込み (MPI対応)
-        plist_id = H5Pcreate(H5P_DATASET_XFER);
-        H5Pset_dxpl_mpio(plist_id, H5FD_MPIO_INDEPENDENT);  // または H5FD_MPIO_INDEPENDENT
-        status = H5Dwrite(dataset_id, memtype, H5S_ALL, H5S_ALL, plist_id, Surface);
-        H5Pclose(plist_id);
+        if (commRank == 0) {   /* 書き込みは rank 0 のみ */
+            plist_id = H5Pcreate(H5P_DATASET_XFER);
+            H5Pset_dxpl_mpio(plist_id, H5FD_MPIO_INDEPENDENT);  // または H5FD_MPIO_INDEPENDENT
+            status = H5Dwrite(dataset_id, memtype, H5S_ALL, H5S_ALL, plist_id, Surface);
+            H5Pclose(plist_id);
+        }
         H5Dclose(dataset_id);
         H5Sclose(dataspace_id);
+	    H5Tclose(memtype);
 
-        fprintf(stdout, "meta9.\n");
         // メタデータグループのクローズ
         H5Gclose(metadata_group_id);
-        
-        fprintf(stdout, "meta10.\n");
     }
+
 
     // グループ作成後の同期
     MPI_Barrier(MPI_COMM_WORLD);
