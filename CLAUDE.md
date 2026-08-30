@@ -110,6 +110,17 @@ $OLDPWD/bin/orcwa -n 2 grating.ofd && cat rcwa_efficiency.csv
   `/rcwa/spectrum` に compound `[npol][NFreq]` = `{frequency, lambda, R, T, A}`
   を書く。CSV も従来どおり並行出力する。詳細は `AGENTS.md`。
 
+## 発熱量密度 `P_loss` (FDTD)
+
+- `P = 1/2 sigma_e |E|^2 + 1/2 sigma_m |H|^2`。**導電率はセルごとの材料から引く**
+  (`iEx`/`iEy`/`iEz`, `iHx`/`iHy`/`iHz` で成分ごとに `Material[id].esgm` / `.msgm`)。
+  実装は `sol/powerloss.c` に 1 本化。
+- 無損失入力 (`dipole.ofd` = PEC+空気) では**全セル厳密に 0** になること。
+  旧実装は材料 0 固定 + `mu''=1e-3` のマジック定数で 2.5e11 W/m^3 を返していた。
+- 検証は `ci/check_ploss.py lossless|lossy`。損失材ありのサンプルは
+  `data/sample/lossy_block.ofd`。
+- 現状 `P_loss` を出すのは直列版のみ (MPI/CUDA 版は未対応)。
+
 ## 移植性
 
 - C99 VLA 禁止 (MSVC)。libm は `MATH_LIB` 変数経由 (MSVC では空)。C++ ランタイムは

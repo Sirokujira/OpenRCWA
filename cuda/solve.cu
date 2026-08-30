@@ -305,10 +305,15 @@ void solve(int io, double *tdft, FILE *fp)
                 for (int ifreq = 0; ifreq < NFreq2; ifreq++) {
                     int64_t n0 = ifreq * NN;
                     for (int nn = 0; nn < NN; nn++) {
+                        /* 直列版 (sol/solve.c) と同じ Poynting ベクトル。
+                           2 箇所で cHz_r が cEz_r と打ち間違えられており、
+                           CUDA ビルドだけ P の 2 成分が別物になっていた。
+                           格納順は直列版の慣習に合わせる (Ex*Hy-Ey*Hx,
+                           Ey*Hz-Ez*Hy, Ez*Hx-Ex*Hz)。 */
                         double p_value[3] = {
                             cEx_r[n0 + nn] * cHy_r[n0 + nn] - cEy_r[n0 + nn] * cHx_r[n0 + nn],
-                            cEy_r[n0 + nn] * cEz_r[n0 + nn] - cEz_r[n0 + nn] * cHy_r[n0 + nn],
-                            cEz_r[n0 + nn] * cHx_r[n0 + nn] - cEx_r[n0 + nn] * cEz_r[n0 + nn]
+                            cEy_r[n0 + nn] * cHz_r[n0 + nn] - cEz_r[n0 + nn] * cHy_r[n0 + nn],
+                            cEz_r[n0 + nn] * cHx_r[n0 + nn] - cEx_r[n0 + nn] * cHz_r[n0 + nn]
                         };
 
                         hsize_t p_offset[4] = {0, ifreq, nn, 0};

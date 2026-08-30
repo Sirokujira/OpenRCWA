@@ -1,0 +1,25 @@
+OpenRCWA 4 2
+title = dipole antenna with lossy blocks (P_loss validation)
+# 発熱量密度 P_loss がセルごとの材料から求まっていることを確認するための入力。
+# 電気損失だけの材料と磁気損失だけの材料を 1 個ずつ置き、
+#   P_loss = 1/2 sigma_e |E|^2 + 1/2 sigma_m |H|^2
+# が材料のある場所にだけ立つことを見る。
+# (無損失版は dipole.ofd — こちらは P_loss が全セル厳密に 0 になる)
+xmesh = -0.075 30 0.075
+ymesh = -0.075 30 0.075
+zmesh = -0.075 10 -0.025 11 0.025 10 0.075
+# material = <type> <epsr> <esgm[S/m]> <amur> <msgm[1/Sm]>
+# id 2: 導電性誘電体 (電気損失のみ)
+material = 1 2.0 0.5 1.0 0.0
+# id 3: 磁性損失材 (磁気損失のみ)
+material = 1 1.0 0.0 2.0 0.3
+# PEC ダイポール
+geometry = 1 1 0 0 0 0 -0.025 0.025
+# 損失ブロック 2 個 (ダイポールの両側、互いに離す)
+geometry = 2 1 0.020 0.045 -0.020 0.020 -0.020 0.020
+geometry = 3 1 -0.045 -0.020 -0.020 0.020 -0.020 0.020
+feed = Z 0 0 0 1 0 50
+frequency1 = 2e9 3e9 4
+frequency2 = 3e9 3e9 0
+solver = 400 50 1e-3
+end

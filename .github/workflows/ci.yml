@@ -43,6 +43,8 @@ jobs:
           sudo apt-get install -y clang libc++-dev libc++abi-dev
           # HDF5 出力の構造検証に h5dump を使う
           sudo apt-get install -y hdf5-tools
+          # P_loss の検証に h5py を使う (apt だと python3-numpy ごと引くので PyPI から)
+          python3 -m pip install --break-system-packages --quiet h5py
 
       - name: Configure (CPU only)
         run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DWITH_CUDA=OFF -DWITH_MPI=OFF
@@ -73,6 +75,24 @@ jobs:
           "$GITHUB_WORKSPACE/bin/orcwa" -n 2 dipole.ofd
           grep -q "normal end" orcwa.log
           test -s orcwa.out
+
+      # 発熱量密度 P_loss はセルごとの材料から求めなければならない。
+      # 以前は material_id = 0 (= 空気) の導電率を全セルに使い、磁気損失を
+      # mu'' = 1e-3 のマジック定数にしていたため、PEC + 空気だけの dipole.ofd
+      # でも最大 2.5e11 W/m^3 を返していた (正しくは全セル厳密に 0)。
+      - name: Check P_loss — lossless input must dissipate nothing
+        run: |
+          python3 ci/check_ploss.py lossless /tmp/smoke/time_series_data.h5
+
+      - name: Check P_loss — lossy blocks (material lookup)
+        run: |
+          mkdir -p /tmp/smoke-lossy && cp data/sample/lossy_block.ofd /tmp/smoke-lossy/
+          cd /tmp/smoke-lossy
+          "$GITHUB_WORKSPACE/bin/orcwa" -n 2 lossy_block.ofd
+          grep -q "normal end" orcwa.log
+          # sigma_e / sigma_m は lossy_block.ofd の material 行の最大値
+          python3 "$GITHUB_WORKSPACE/ci/check_ploss.py" lossy \
+            --sigma-e 0.5 --sigma-m 0.3 time_series_data.h5
 
       - name: Smoke test — post processor
         run: |
@@ -259,6 +279,7 @@ jobs:
           name: smoke-logs
           path: |
             /tmp/smoke/*.log
+            /tmp/smoke-lossy/*.log
             /tmp/smoke-rcwa/*.log
             /tmp/smoke-orcwa/*.log
             /tmp/rcwa-unit/*.log

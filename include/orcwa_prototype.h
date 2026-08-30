@@ -132,6 +132,7 @@ extern void        mpi_close(void);
 
 // C + CUDA
 extern void        average(double []);
+extern void        calculatePowerLoss(double *);
 extern void        dftNear1d(int, int *, d_complex_t *, d_complex_t *, d_complex_t *, d_complex_t *, d_complex_t *, d_complex_t *);
 extern void        dftNear1dX(int, int, int64_t, int64_t, d_complex_t *, d_complex_t *, d_complex_t *, d_complex_t *, d_complex_t *, d_complex_t *);
 extern void        dftNear1dY(int, int, int64_t, int64_t, d_complex_t *, d_complex_t *, d_complex_t *, d_complex_t *, d_complex_t *, d_complex_t *);

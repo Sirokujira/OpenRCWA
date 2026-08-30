@@ -1,6 +1,7 @@
 # Build directories
 /build/
 /build-mpi/
+/build-cuda/
 /bin/
 
 # Python cache

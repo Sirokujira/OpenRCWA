@@ -84,7 +84,8 @@ CI (Linux ジョブ) が全件を実行し、エネルギー保存と解析解�
 | `rcwa_oblique.ofd` | `orcwa` | 斜め入射 (ブリュースター角)。R_TM≈0, R_TE=0.147929 |
 | `rcwa_metal.ofd` | `orcwa` | 複素誘電率の金属薄膜。R=0.909420, T=0.084430, A>0 |
 | `grating.ofd` | `orcwa` | 周期格子の波長掃引。全点で R+T=1 |
-| `dipole.ofd` | `orcwa` | FDTD (RCWA ではない) |
+| `dipole.ofd` | `orcwa` | FDTD (RCWA ではない)。無損失 (PEC+空気) なので **P_loss は全セル厳密に 0** |
+| `lossy_block.ofd` | `orcwa` | FDTD。電気損失材と磁気損失材のブロック。P_loss がその場所にだけ立つ |
 
 **格子では TM の収束が遅い。** 誘電率境界で法線 E が不連続になるためで、
 RCWA の既知の性質。`grating.ofd` の実測 (λ=461nm):
@@ -170,6 +171,35 @@ GUI (OpenFDTD-X) は入力ファイルのあるディレクトリへ `cd` して
 - これは既知かつ意図的な現状仕様 (2026-08 時点でユーザー判断により維持)。
   GUI から出力先を制御する必要が出たときに、`-out` を RCWA にも
   効かせるかを改めて判断する。
+
+## 発熱量密度 `P_loss` (FDTD)
+
+時間平均の消費電力密度 [W/m^3]:
+
+    P = 1/2 sigma_e |E|^2 + 1/2 sigma_m |H|^2
+
+- **導電率はセルごとの材料から引く**。Yee 格子では E/H の各成分が別の位置にあり、
+  成分ごとに材料 ID (`iEx`/`iEy`/`iEz`, `iHx`/`iHy`/`iHz`) が違うので、
+  成分ごとに `Material[id].esgm` / `Material[id].msgm` を掛ける。
+  実装は `sol/powerloss.c` の `calculatePowerLoss()` に 1 本化してある。
+- 空気 (ID 0) も PEC (ID 1) も `esgm = msgm = 0`。PEC は `C1 = C2 = 0` で E が 0 に
+  固定されるため、完全導体は電力を消費しないモデルになる。
+- 係数 1/2 は `cEx_r` 等が波高値 (peak) の位相子であることを前提にする。
+- **旧実装の壊れ方** (2026-08 に修正): `material_id = 0` (= 空気) の導電率を全セルに
+  使い、磁気損失を `mu'' = 1e-3` のマジック定数にしていた。そのため無損失の
+  `dipole.ofd` でも最大 2.5e11 W/m^3 を返していた。さらに結果を捨てるだけの
+  `updateTemperature()` (温度 T はどこにも出力されない) を毎ステップ回していた。
+- 検証は `ci/check_ploss.py`:
+
+```bash
+# 無損失入力 (dipole.ofd): 全セル厳密に 0
+python3 ci/check_ploss.py lossless time_series_data.h5
+# 損失材あり (lossy_block.ofd): 材料のある場所にだけ立つ / E・H から決まる上限を超えない
+python3 ci/check_ploss.py lossy --sigma-e 0.5 --sigma-m 0.3 time_series_data.h5
+```
+
+- `P_loss` は**まだ直列版 (`sol/solve.c`) しか出力しない**。MPI / CUDA / CUDA+MPI
+  版は未対応 (`ci/compare_h5.py` が除外している)。
 
 ## 物理規約 (違反すると結果が静かに壊れる)
 

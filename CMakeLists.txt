@@ -323,6 +323,7 @@ if (WITH_CUDA)
             ${CMAKE_SOURCE_DIR}/sol/geomlines.c
             ${CMAKE_SOURCE_DIR}/sol/farfield.c
             ${CMAKE_SOURCE_DIR}/sol/writeout.c
+            ${CMAKE_SOURCE_DIR}/sol/powerloss.c
             ${CMAKE_SOURCE_DIR}/sol/utils.c
             ${CMAKE_SOURCE_DIR}/sol/cputime.c
             ${CMAKE_SOURCE_DIR}/sol/plot3dGeom.c
@@ -514,6 +515,7 @@ else()
             ${CMAKE_SOURCE_DIR}/sol/updateHx.c
             ${CMAKE_SOURCE_DIR}/sol/updateHy.c
             ${CMAKE_SOURCE_DIR}/sol/updateHz.c
+            ${CMAKE_SOURCE_DIR}/sol/powerloss.c
             ${CMAKE_SOURCE_DIR}/sol/utils.c
             ${CMAKE_SOURCE_DIR}/sol/vfeed.c
             ${CMAKE_SOURCE_DIR}/sol/vpoint.c
@@ -569,6 +571,7 @@ if (WITH_POST)
         ${CMAKE_SOURCE_DIR}/sol/nearfield_c.c
         ${CMAKE_SOURCE_DIR}/sol/farfield.c
         ${CMAKE_SOURCE_DIR}/sol/outputCoupling.c
+        ${CMAKE_SOURCE_DIR}/sol/powerloss.c
         ${CMAKE_SOURCE_DIR}/sol/utils.c
         ${CMAKE_SOURCE_DIR}/sol/ev3d.c
     )
