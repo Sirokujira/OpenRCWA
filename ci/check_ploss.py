@@ -38,19 +38,31 @@ def data_groups(f):
 def check_lossless(f):
     problems = []
     worst = 0.0
-    for g in data_groups(f):
+    groups = data_groups(f)
+    if not groups:
+        # ここを見ないと、data グループが 1 つも無いファイルが
+        # 「max = 0」で素通りしてしまう (空振りで合格する)
+        return ["data グループが 1 つも無い"], ""
+    checked = 0
+    for g in groups:
         name = g + "/P_loss"
         if name not in f:
             problems.append(f"{name} が無い")
             continue
         p = f[name][()]
+        if p.size == 0:
+            problems.append(f"{name} が空 (要素数 0)")
+            continue
+        checked += 1
         worst = max(worst, float(np.max(np.abs(p))))
+    if checked == 0:
+        problems.append("中身のある P_loss が 1 つも無い")
     if worst != 0.0:
         problems.append(
             f"無損失入力なのに P_loss が 0 でない (max|P_loss| = {worst:.6g})。"
             " セルごとの材料から導電率を引けていない可能性がある"
         )
-    return problems, f"max|P_loss| = {worst:.6g} (全 {len(data_groups(f))} グループ)"
+    return problems, f"max|P_loss| = {worst:.6g} ({checked} グループを検査)"
 
 
 def check_lossy(f, sigma_e, sigma_m):
@@ -72,6 +84,8 @@ def check_lossy(f, sigma_e, sigma_m):
     h = h.reshape(h.shape[1], h.shape[2], 6)
 
     nn = p.shape[1]
+    if p.size == 0:
+        return [f"{g}/P_loss が空 (要素数 0)"], ""
     nonzero = int(np.count_nonzero(p))
     frac = nonzero / (p.size or 1)
 
