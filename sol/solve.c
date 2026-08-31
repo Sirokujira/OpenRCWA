@@ -506,6 +506,32 @@ void solve(int io, double *tdft, FILE *fp) {
     H5Sclose(dataspace_id);
     H5Tclose(memtype);
 
+    /* 屈折率マップ (metadata/Reflection)。セルごとの材料の sqrt(epsr)。
+       CUDA 版だけが出していたため、CUDA ビルドに切り替えたときだけ GUI に
+       出せるデータが増える (= 逆に言うと他のビルドでは欠ける) 状態だった。
+       全ビルドで同じ内容を出す。 */
+    {
+        hsize_t ref_dims[2] = {(hsize_t)NN, 1};
+        hid_t ref_space = H5Screate_simple(2, ref_dims, NULL);
+        hid_t ref_set = H5Dcreate(metadata_group_id, "Reflection", H5T_NATIVE_DOUBLE,
+                                  ref_space, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+        double *ref = (double *)malloc((size_t)NN * sizeof(double));
+        if (ref == NULL) {
+            fprintf(stderr, "*** Reflection array malloc error (NN=%zu)\n", (size_t)NN);
+            exit(1);
+        }
+        for (int64_t nn = 0; nn < NN; nn++) {
+            ref[nn] = sqrt(Material[iEx[nn]].epsr);
+        }
+        status = H5Dwrite(ref_set, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, ref);
+        if (status < 0) {
+            fprintf(stderr, "Error writing Reflection data\n");
+        }
+        free(ref);
+        H5Dclose(ref_set);
+        H5Sclose(ref_space);
+    }
+
     // メタデータグループのクローズ
     H5Gclose(metadata_group_id);
 

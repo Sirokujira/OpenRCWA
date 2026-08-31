@@ -82,6 +82,16 @@ void solve(int io, double *tdft, FILE *fp)
     const int w_full_jk = ((w_j0 == (0 - l_y)) && (w_j1 == (Ny + l_y))
                         && (w_k0 == (0 - l_z)) && (w_k1 == (Nz + l_z)));
 
+    /* 発熱量密度 [W/m^3]。直列版と同じく出力時 (nout ごと) にだけ計算する。
+       calculatePowerLoss() は rank ローカルの NN / iEx 等を使うので、
+       各 rank が自分の担当範囲を計算する。 */
+    double *P_losses = (double *)malloc((size_t)NFreq2 * NN * sizeof(double));
+    if (P_losses == NULL) {
+        fprintf(stderr, "*** P_loss array malloc error (NFreq2=%d NN=%zu)\n", NFreq2, (size_t)NN);
+        exit(1);
+    }
+    memset(P_losses, 0, (size_t)NFreq2 * NN * sizeof(double));
+
     // time step iteration
     int itime;
     double t = 0;
@@ -221,6 +231,10 @@ void solve(int io, double *tdft, FILE *fp)
             {
                 // グループの作成前に同期
                 //MPI_Barrier(MPI_COMM_WORLD);
+                /* 発熱量密度は書き出す直前にだけ計算する
+                   (値は現在の DFT 配列だけで決まるので毎ステップ回す必要がない) */
+                calculatePowerLoss(P_losses);
+
                 // 各時間ステップごとにグループを作成
                 char group_name[32];
                 snprintf(group_name, sizeof(group_name), "/data%06d", itime);
@@ -500,6 +514,68 @@ void solve(int io, double *tdft, FILE *fp)
                 }
                 H5Dclose(dataset_id);
                 H5Sclose(dataspace_id);
+
+                /* 発熱量密度 P_loss。直列版 (sol/solve.c) と同じ形
+                   [1, NFreq2, g_NN, 1] で出す。GUI は同じファイルを読むので、
+                   ビルド構成でデータセットが欠けると機能が黙って落ちる。
+                   書き方は E/H/P と同じ集団書き込み。 */
+                hsize_t pl_dims[4] = {1, NFreq2, g_NN, 1};
+                dataspace_id = H5Screate_simple(4, pl_dims, NULL);
+                dataset_id = H5Dcreate(group_id, "P_loss", H5T_NATIVE_DOUBLE, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+                {
+                    const int64_t nsel = w_ncell;
+                    double *buf = (double *)malloc((size_t)nsel * sizeof(double));
+                    hsize_t mdims[1] = {(hsize_t)nsel};
+                    hid_t mspace = H5Screate_simple(1, mdims, NULL);
+                    hid_t dxpl = H5Pcreate(H5P_DATASET_XFER);
+                    H5Pset_dxpl_mpio(dxpl, H5FD_MPIO_COLLECTIVE);
+
+                    for (int ifreq = 0; ifreq < NFreq2; ifreq++) {
+                        int64_t n0 = ifreq * NN;
+
+                        H5Sselect_none(dataspace_id);
+                        if (w_full_jk) {
+                            const int64_t g_beg = ((int64_t)w_i0 * g_Ni) + ((int64_t)w_j0 * g_Nj)
+                                                + ((int64_t)w_k0 * g_Nk) + g_N0;
+                            hsize_t st[4] = {0, (hsize_t)ifreq, (hsize_t)g_beg, 0};
+                            hsize_t ct[4] = {1, 1, (hsize_t)(w_ni * g_Ni), 1};
+                            H5Sselect_hyperslab(dataspace_id, H5S_SELECT_SET, st, NULL, ct, NULL);
+                        } else {
+                        for (int gi = w_i0; gi <= w_i1; gi++) {
+                        for (int gj = w_j0; gj <= w_j1; gj++) {
+                            const int64_t g_run = ((int64_t)gi * g_Ni) + ((int64_t)gj * g_Nj)
+                                                + ((int64_t)w_k0 * g_Nk) + g_N0;
+                            hsize_t st[4] = {0, (hsize_t)ifreq, (hsize_t)g_run, 0};
+                            hsize_t ct[4] = {1, 1, (hsize_t)w_nk, 1};
+                            H5Sselect_hyperslab(dataspace_id, H5S_SELECT_OR, st, NULL, ct, NULL);
+                        }
+                        }
+                        }
+
+                        /* メモリ側は選択と同じ (i,j,k) 順に詰める */
+                        int64_t q = 0;
+                        for (int gi = w_i0; gi <= w_i1; gi++) {
+                        for (int gj = w_j0; gj <= w_j1; gj++) {
+                        for (int gk = w_k0; gk <= w_k1; gk++) {
+                            const int64_t nn = ((int64_t)gi * Ni) + ((int64_t)gj * Nj)
+                                             + ((int64_t)gk * Nk) + N0;
+                            buf[q++] = P_losses[n0 + nn];
+                        }
+                        }
+                        }
+
+                        status = H5Dwrite(dataset_id, H5T_NATIVE_DOUBLE, mspace, dataspace_id, dxpl, buf);
+                        if (status < 0) {
+                            fprintf(stderr, "Error writing P_loss data at itime=%d, ifreq=%d\n", itime, ifreq);
+                        }
+                    }
+                    H5Pclose(dxpl);
+                    H5Sclose(mspace);
+                    free(buf);
+                }
+                H5Dclose(dataset_id);
+                H5Sclose(dataspace_id);
+
                 // グループのクローズ
                 H5Gclose(group_id);
                 
@@ -520,6 +596,8 @@ void solve(int io, double *tdft, FILE *fp)
         }
     }
 
+    // メモリの解放
+    free(P_losses);
 
     // result
     if (io) {
@@ -786,6 +864,66 @@ void solve(int io, double *tdft, FILE *fp)
         H5Dclose(dataset_id);
         H5Sclose(dataspace_id);
 	    H5Tclose(memtype);
+
+        /* 屈折率マップ (metadata/Reflection)。セルごとの材料の sqrt(epsr)。
+           CUDA 版だけが出していたので全ビルドで揃える。
+           セル単位のデータなので、各 rank が自分の担当範囲を全体添字の
+           ハイパースラブに置いて集団書き込みする (E/H/P と同じ要領)。 */
+        {
+            hsize_t ref_dims[2] = {(hsize_t)g_NN, 1};
+            hid_t ref_space = H5Screate_simple(2, ref_dims, NULL);
+            hid_t ref_set = H5Dcreate(metadata_group_id, "Reflection", H5T_NATIVE_DOUBLE,
+                                      ref_space, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+            double *ref = (double *)malloc((size_t)w_ncell * sizeof(double));
+            if (ref == NULL) {
+                fprintf(stderr, "*** Reflection array malloc error (w_ncell=%zu)\n", (size_t)w_ncell);
+                exit(1);
+            }
+            hsize_t rmdims[1] = {(hsize_t)w_ncell};
+            hid_t ref_mspace = H5Screate_simple(1, rmdims, NULL);
+            hid_t ref_dxpl = H5Pcreate(H5P_DATASET_XFER);
+            H5Pset_dxpl_mpio(ref_dxpl, H5FD_MPIO_COLLECTIVE);
+
+            H5Sselect_none(ref_space);
+            if (w_full_jk) {
+                const int64_t g_beg = ((int64_t)w_i0 * g_Ni) + ((int64_t)w_j0 * g_Nj)
+                                    + ((int64_t)w_k0 * g_Nk) + g_N0;
+                hsize_t st[2] = {(hsize_t)g_beg, 0};
+                hsize_t ct[2] = {(hsize_t)(w_ni * g_Ni), 1};
+                H5Sselect_hyperslab(ref_space, H5S_SELECT_SET, st, NULL, ct, NULL);
+            } else {
+            for (int gi = w_i0; gi <= w_i1; gi++) {
+            for (int gj = w_j0; gj <= w_j1; gj++) {
+                const int64_t g_run = ((int64_t)gi * g_Ni) + ((int64_t)gj * g_Nj)
+                                    + ((int64_t)w_k0 * g_Nk) + g_N0;
+                hsize_t st[2] = {(hsize_t)g_run, 0};
+                hsize_t ct[2] = {(hsize_t)w_nk, 1};
+                H5Sselect_hyperslab(ref_space, H5S_SELECT_OR, st, NULL, ct, NULL);
+            }
+            }
+            }
+
+            int64_t q = 0;
+            for (int gi = w_i0; gi <= w_i1; gi++) {
+            for (int gj = w_j0; gj <= w_j1; gj++) {
+            for (int gk = w_k0; gk <= w_k1; gk++) {
+                const int64_t nn = ((int64_t)gi * Ni) + ((int64_t)gj * Nj)
+                                 + ((int64_t)gk * Nk) + N0;
+                ref[q++] = sqrt(Material[iEx[nn]].epsr);
+            }
+            }
+            }
+
+            status = H5Dwrite(ref_set, H5T_NATIVE_DOUBLE, ref_mspace, ref_space, ref_dxpl, ref);
+            if (status < 0) {
+                fprintf(stderr, "Error writing Reflection data\n");
+            }
+            H5Pclose(ref_dxpl);
+            H5Sclose(ref_mspace);
+            free(ref);
+            H5Dclose(ref_set);
+            H5Sclose(ref_space);
+        }
 
         // メタデータグループのクローズ
         H5Gclose(metadata_group_id);

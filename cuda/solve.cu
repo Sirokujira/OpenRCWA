@@ -39,6 +39,15 @@ void solve(int io, double *tdft, FILE *fp)
     file_id = H5Fcreate(FILE_NAME, H5F_ACC_TRUNC, H5P_DEFAULT, H5P_DEFAULT);
 
     // time step iteration
+    /* 発熱量密度 [W/m^3]。直列版と同じく出力時 (nout ごと) にだけ計算する。
+       DFT 配列はこの直前の memcopy3_gpu() でホストに戻っている。 */
+    double *P_losses = (double *)malloc((size_t)NFreq2 * NN * sizeof(double));
+    if (P_losses == NULL) {
+        fprintf(stderr, "*** P_loss array malloc error (NFreq2=%d NN=%zu)\n", NFreq2, (size_t)NN);
+        exit(1);
+    }
+    memset(P_losses, 0, (size_t)NFreq2 * NN * sizeof(double));
+
     int itime;
     double t = 0;
 
@@ -150,6 +159,10 @@ void solve(int io, double *tdft, FILE *fp)
 
                 // copy near3d from device to host
                 memcopy3_gpu();
+
+                /* 発熱量密度は書き出す直前にだけ計算する
+                   (値は現在の DFT 配列だけで決まるので毎ステップ回す必要がない) */
+                calculatePowerLoss(P_losses);
 
                 // 各時間ステップごとにグループを作成
                 char group_name[32];
@@ -327,6 +340,35 @@ void solve(int io, double *tdft, FILE *fp)
                 }
                 H5Dclose(dataset_id);
                 H5Sclose(dataspace_id);
+
+                /* 発熱量密度 P_loss。直列版 (sol/solve.c) と同じ形
+                   [1, NFreq2, NN, 1] で出す。GUI は同じファイルを読むので、
+                   ビルド構成でデータセットが欠けると機能が黙って落ちる。 */
+                hsize_t pl_dims[4] = {1, NFreq2, NN, 1};
+                dataspace_id = H5Screate_simple(4, pl_dims, NULL);
+                dataset_id = H5Dcreate(group_id, "P_loss", H5T_NATIVE_DOUBLE, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+
+                hsize_t mem_dims3[1] = {1};
+                H5Sclose(memspace_id);
+                memspace_id = H5Screate_simple(1, mem_dims3, NULL);
+
+                for (int ifreq = 0; ifreq < NFreq2; ifreq++) {
+                    int64_t n0 = ifreq * NN;
+                    for (int nn = 0; nn < NN; nn++) {
+                        double pl_value[1] = { P_losses[n0 + nn] };
+
+                        hsize_t pl_offset[4] = {0, (hsize_t)ifreq, (hsize_t)nn, 0};
+                        hsize_t pl_count[4] = {1, 1, 1, 1};
+                        H5Sselect_hyperslab(dataspace_id, H5S_SELECT_SET, pl_offset, NULL, pl_count, NULL);
+                        status = H5Dwrite(dataset_id, H5T_NATIVE_DOUBLE, memspace_id, dataspace_id, H5P_DEFAULT, pl_value);
+                        if (status < 0) {
+                            fprintf(stderr, "Error writing P_loss data at itime=%d, ifreq=%d, nn=%d\n", itime, ifreq, nn);
+                        }
+                    }
+                }
+                H5Dclose(dataset_id);
+                H5Sclose(dataspace_id);
+
                 // グループのクローズ
                 H5Gclose(group_id);
             }
@@ -344,6 +386,9 @@ void solve(int io, double *tdft, FILE *fp)
 
     // メモリスペース、データセットとデータスペースのクローズ
     status = H5Sclose(memspace_id);
+
+    // メモリの解放
+    free(P_losses);
 
     // result
     if (io) {

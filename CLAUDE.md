@@ -119,7 +119,10 @@ $OLDPWD/bin/orcwa -n 2 grating.ofd && cat rcwa_efficiency.csv
   旧実装は材料 0 固定 + `mu''=1e-3` のマジック定数で 2.5e11 W/m^3 を返していた。
 - 検証は `ci/check_ploss.py lossless|lossy`。損失材ありのサンプルは
   `data/sample/lossy_block.ofd`。
-- 現状 `P_loss` を出すのは直列版のみ (MPI/CUDA 版は未対応)。
+- `P_loss` は直列 / MPI / CUDA / CUDA+MPI の 4 ビルドすべてが出す。
+- **HDF5 のデータセットは 4 ビルドで揃える**。`/data%06d` = `E`/`H`/`P`/`P_loss`/
+  `Surface`、`/metadata` に `Reflection` (セルごとの屈折率)。GUI は同じファイルを
+  読むので、片方にしか無いと機能が黙って落ちる。新規追加は 4 本すべてに入れる。
 
 ## 移植性
 
@@ -158,7 +161,6 @@ $OLDPWD/bin/orcwa -n 2 grating.ofd && cat rcwa_efficiency.csv
   足すときは次元に使う変数が全 rank で同じか必ず確認する。
 - 給電点・観測点の波形は担当 rank にしか溜まらないので、出力前に
   `comm_feed()` / `comm_point()` で rank 0 に集める。
-- 既知の差分: `data%06d/P_loss` は直列版のみ (MPI 版は未移植)。
 - 検証は `ci/compare_h5.py <serial.h5> <mpi.h5>`。詳細は `AGENTS.md`。
 
 ## CI
@@ -169,7 +171,8 @@ $OLDPWD/bin/orcwa -n 2 grating.ofd && cat rcwa_efficiency.csv
 (固有値の経路が Linux/macOS = LAPACKE、Windows = Eigen フォールバックと
 異なるため、3 プラットフォームで解析解との一致を確認する意味がある)。
 Linux ジョブはさらに libc++ 構文チェック (macOS 互換性の先行検出) を行う。
-`build-mpi` ジョブは MPI ビルドを不均等分割 (n=4, 7) を含めて実行し、
+`build-mpi` ジョブは MPI ビルドを不均等分割 (n=4, 7) を含め、無損失
+(`dipole.ofd`) と損失材あり (`lossy_block.ofd`) の両方で実行し、
 `ci/compare_h5.py` で直列版と HDF5 出力が一致することを確認する。
 タグ `v*` push で Release にバイナリ添付。
 

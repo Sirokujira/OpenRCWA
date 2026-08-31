@@ -154,6 +154,24 @@ R_TE 9e-6 / R_TM 8.7e-5)。**新しい格子サンプルを足すときは、TE 
 - 出力ファイル名: `.ofd` 経路は `time_series_data.h5`、`.orcwa` 経路は
   `-o` で指定した CSV の拡張子を `.h5` に置換したもの。
 
+### ビルド構成による出力の違い (揃えること)
+
+GUI は `time_series_data.h5` を読むので、**ビルド構成でデータセットが欠けると
+機能が黙って落ちる**。4 つのソルバ (`sol/solve.c` / `mpi/solve.c` /
+`cuda/solve.cu` / `cuda_mpi/solve.cu`) は同じデータセットを出す:
+
+| グループ | データセット |
+|---|---|
+| `/data%06d` | `E`, `H`, `P`, `P_loss`, `Surface` |
+| `/metadata` | 格子・時刻・波形などのスカラ/配列, `Surface`, `Reflection` |
+
+`Reflection` はセルごとの屈折率 `sqrt(Material[iEx[nn]].epsr)` を `[NN, 1]` で
+出したもの。以前は CUDA 版だけが持っていた。
+
+**新しいデータセットを足すときは 4 本すべてに入れること。** 直列と MPI の
+一致は `ci/compare_h5.py` が CI で検証する (CUDA 系は GPU が要るため CI では
+ビルドのみ)。
+
 ### 出力先のパス (現状仕様 — 変更しないこと)
 
 `.ofd` 経路の出力 (`rcwa_efficiency.csv` / `time_series_data.h5` /
@@ -198,8 +216,9 @@ python3 ci/check_ploss.py lossless time_series_data.h5
 python3 ci/check_ploss.py lossy --sigma-e 0.5 --sigma-m 0.3 time_series_data.h5
 ```
 
-- `P_loss` は**まだ直列版 (`sol/solve.c`) しか出力しない**。MPI / CUDA / CUDA+MPI
-  版は未対応 (`ci/compare_h5.py` が除外している)。
+- `P_loss` は**直列 / MPI / CUDA / CUDA+MPI の 4 ビルドすべてが出力する**。
+  実装は `sol/powerloss.c` の 1 本で、MPI 系は各 rank が自分の担当範囲を
+  計算して集団書き込みする。
 
 ## 物理規約 (違反すると結果が静かに壊れる)
 
@@ -362,11 +381,11 @@ python3 ci/compare_h5.py <serial>/time_series_data.h5 time_series_data.h5
   出力前に `comm_feed()` / `comm_point()` で rank 0 へ集める
   (これを呼び忘れていて、rank 0 が給電セルを持たない n≥4 で `IFeed` が
   直列と 6.6e-3 ずれていた)。
-- **既知の差分**: `data%06d/P_loss` (発熱量) は直列版 (`sol/solve.c`) にしか
-  なく、MPI 版は未移植。`ci/compare_h5.py` はこれを除外している。
-- CI の `build-mpi` ジョブが n=2,3,4,7 を回し、`ci/compare_h5.py` で
-  直列版との一致 (E/H/P/Surface とメタデータは差 0、Eiter/Hiter のみ
-  総和順序ぶんの許容差) を確認する。
+- CI の `build-mpi` ジョブが n=2,3,4,7 を **無損失 (`dipole.ofd`) と損失材あり
+  (`lossy_block.ofd`) の両方**で回し、`ci/compare_h5.py` で直列版との一致
+  (E/H/P/P_loss/Surface/Reflection とメタデータは差 0、Eiter/Hiter のみ
+  総和順序ぶんの許容差) を確認する。無損失だけだと `P_loss` が全セル 0 で、
+  MPI 側がまるごと壊れていても一致してしまうため両方回す。
 
 ## 落とし穴 (Gotchas)
 

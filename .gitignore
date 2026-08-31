@@ -2,6 +2,7 @@
 /build/
 /build-mpi/
 /build-cuda/
+/build-cudampi/
 /bin/
 
 # Python cache
