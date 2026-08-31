@@ -333,11 +333,14 @@ jobs:
 
       - name: Serial reference run
         run: |
-          mkdir -p /tmp/mpi-ref && cp data/sample/dipole.ofd /tmp/mpi-ref/
+          # cd した後に相対パスを使わないこと (同じ run: ブロック内で cd は残る)
+          mkdir -p /tmp/mpi-ref
+          cp "$GITHUB_WORKSPACE/data/sample/dipole.ofd" /tmp/mpi-ref/
           cd /tmp/mpi-ref && "$GITHUB_WORKSPACE/bin/orcwa" -n 1 dipole.ofd
           # 損失材ありも比較する。無損失 (dipole) だけだと P_loss が全セル 0 で、
           # MPI 側の P_loss がまるごと壊れていても一致してしまう。
-          mkdir -p /tmp/mpi-ref-lossy && cp data/sample/lossy_block.ofd /tmp/mpi-ref-lossy/
+          mkdir -p /tmp/mpi-ref-lossy
+          cp "$GITHUB_WORKSPACE/data/sample/lossy_block.ofd" /tmp/mpi-ref-lossy/
           cd /tmp/mpi-ref-lossy && "$GITHUB_WORKSPACE/bin/orcwa" -n 1 lossy_block.ofd
 
       # 不均等分割 (n=4: 7,7,7,9 / n=7: 4,4,4,4,4,4,6) を含めてハングを検出する。
