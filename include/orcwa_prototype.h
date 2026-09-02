@@ -126,6 +126,10 @@ extern void        comm_Z(int);
 extern void        mpi_init(int, char **);
 extern void        mpi_close(void);
 
+/* 発熱量密度 (sol/powerloss.c)。CUDA 版は無く C の実装を全ビルドで共有する
+   ので、C++ (.cu) から呼べるよう extern "C" の中に置く。 */
+extern void        calculatePowerLoss(double *);
+
 #ifdef __cplusplus
 }
 #endif

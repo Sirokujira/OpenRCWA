@@ -7,86 +7,18 @@
 
 #define FILE_NAME "time_series_data.h5"
 
-// 温度更新関数
-//void updateTemperature(double *T, int Nx, int Ny, int Nz, double alpha, double Dt, double *P_loss) {
-// 温度更新関数
-void updateTemperature(double *T, int64_t NN, int NFreq2, double alpha, double Dt, double *P_loss, double Dx, double Dy, double Dz) {
-    for (int ifreq = 0; ifreq < NFreq2; ifreq++) {
-        const int64_t base_idx = (int64_t)ifreq * NN;
-        // NA マクロで 3 次元格子の隣接セルを参照する (内点のみ更新、境界は固定境界)
-        for (int i = 1; i < Nx - 1; i++) {
-        for (int j = 1; j < Ny - 1; j++) {
-        for (int k = 1; k < Nz - 1; k++) {
-            const int64_t idx = base_idx + NA(i, j, k);
-            const double d2Tdx2 = (T[base_idx + NA(i + 1, j, k)] - 2.0 * T[idx] + T[base_idx + NA(i - 1, j, k)]) / (Dx * Dx);
-            const double d2Tdy2 = (T[base_idx + NA(i, j + 1, k)] - 2.0 * T[idx] + T[base_idx + NA(i, j - 1, k)]) / (Dy * Dy);
-            const double d2Tdz2 = (T[base_idx + NA(i, j, k + 1)] - 2.0 * T[idx] + T[base_idx + NA(i, j, k - 1)]) / (Dz * Dz);
+/*
+発熱量密度 P_loss の計算は sol/powerloss.c に移した (全ビルド構成で共有するため)。
 
-            // 温度の更新
-            T[idx] += alpha * Dt * (d2Tdx2 + d2Tdy2 + d2Tdz2) + Dt * P_loss[idx];
-        }
-        }
-        }
-    }
-}
-
-
-// 発熱量の計算
-// 注意: DFT 配列 (cEx_r 等) は float。double* で受けると読み越しになり
-// Windows ではアクセス違反になる (glibc では偶然動作していた)
-void calculatePowerLoss(double *P_loss, int64_t NN, int NFreq2, double sigma, double mu_double_prime,
-                        const float *cEx_r, const float *cEx_i, const float *cEy_r, const float *cEy_i,
-                        const float *cEz_r, const float *cEz_i,
-                        const float *cHx_r, const float *cHx_i, const float *cHy_r, const float *cHy_i,
-                        const float *cHz_r, const float *cHz_i,
-                        const double *Freq2) {
-    for (int ifreq = 0; ifreq < NFreq2; ifreq++) {
-        double frequency = Freq2[ifreq];  // 各周波数を取得
-        double omega = 2 * M_PI * frequency;  // 角周波数の計算
-        int64_t base_idx = (int64_t)ifreq * NN;
-        for (int64_t i = 0; i < NN; i++) {
-            // 電界の絶対値二乗
-            double E_magnitude_sq = (double)cEx_r[base_idx + i] * cEx_r[base_idx + i] + (double)cEx_i[base_idx + i] * cEx_i[base_idx + i] +
-                                    (double)cEy_r[base_idx + i] * cEy_r[base_idx + i] + (double)cEy_i[base_idx + i] * cEy_i[base_idx + i] +
-                                    (double)cEz_r[base_idx + i] * cEz_r[base_idx + i] + (double)cEz_i[base_idx + i] * cEz_i[base_idx + i];
-
-            // 磁界の絶対値二乗
-            double H_magnitude_sq = (double)cHx_r[base_idx + i] * cHx_r[base_idx + i] + (double)cHx_i[base_idx + i] * cHx_i[base_idx + i] +
-                                    (double)cHy_r[base_idx + i] * cHy_r[base_idx + i] + (double)cHy_i[base_idx + i] * cHy_i[base_idx + i] +
-                                    (double)cHz_r[base_idx + i] * cHz_r[base_idx + i] + (double)cHz_i[base_idx + i] * cHz_i[base_idx + i];
-
-            // 発熱量密度の計算
-            P_loss[base_idx + i] = 0.5 * sigma * E_magnitude_sq + 0.5 * omega * mu_double_prime * H_magnitude_sq;
-        }
-    }
-}
-
-// 導電率の取得関数
-double get_conductivity(int material_id) {
-    if (material_id < 0 || material_id >= NMaterial) {
-        fprintf(stderr, "Invalid material ID: %d\n", material_id);
-        return -1.0;
-    }
-    return Material[material_id].esgm;  // E-σ（導電率）を返す
-}
-
-// 比誘電率の取得関数
-double get_relative_permittivity(int material_id) {
-    if (material_id < 0 || material_id >= NMaterial) {
-        fprintf(stderr, "Invalid material ID: %d\n", material_id);
-        return -1.0;
-    }
-    return Material[material_id].epsr;  // ε-r（比誘電率）を返す
-}
-
-// 比透磁率の取得関数
-double get_relative_permeability(int material_id) {
-    if (material_id < 0 || material_id >= NMaterial) {
-        fprintf(stderr, "Invalid material ID: %d\n", material_id);
-        return -1.0;
-    }
-    return Material[material_id].amur;  // μ-r（比透磁率）を返す
-}
+ここには以前、次の 2 つがあった:
+  - calculatePowerLoss(): 導電率を material_id = 0 (= 空気) 固定で引き、磁気損失を
+    mu'' = 1e-3 のマジック定数にしていた。セルごとの材料を見ていなかったため、
+    無損失問題 (PEC + 空気だけの dipole.ofd) でも最大 2.5e11 W/m^3 を返していた
+    (正しくは全セル厳密に 0)。
+  - updateTemperature(): 毎ステップ全セルに 7 点ステンシルをかけて温度 T を更新して
+    いたが、T はどこにも出力されず free されるだけだった (結果を捨てる計算)。
+    熱解析を入れるなら、出力経路とセルごとの材料定数から作り直すこと。
+*/
 
 void solve(int io, double *tdft, FILE *fp) {
     // HDF5ファイルの作成
@@ -103,34 +35,15 @@ void solve(int io, double *tdft, FILE *fp) {
     // initial field
     initfield();
 
-    // 温度配列の初期化
-    //int Nx = 100, Ny = 100, Nz = 100;
-    double alpha = 0.01;  // 熱拡散係数
-    //double *T = (double *)malloc(Nx * Ny * Nz * sizeof(double));
-    //double *P_loss = (double *)malloc(Nx * Ny * Nz * sizeof(double));
-    //memset(T, 0, Nx * Ny * Nz * sizeof(double));
-    //memset(P_loss, 0, Nx * Ny * Nz * sizeof(double));
-    //NN
-    double *T = (double *)malloc(NFreq2 * NN * sizeof(double));
-    double *P_losses = (double *)malloc(NFreq2 * NN * sizeof(double));
-    if ((T == NULL) || (P_losses == NULL)) {
-        fprintf(stderr, "*** temperature array malloc error (NFreq2=%d NN=%zu)\n", NFreq2, (size_t)NN);
+    /* 発熱量密度 [W/m^3]。出力時 (nout ごと) にだけ計算する。
+       以前は毎ステップ全セルを計算していたが、書き出すのは nout ごとで、
+       値は現在の DFT 配列だけで決まるので結果は変わらない。 */
+    double *P_losses = (double *)malloc((size_t)NFreq2 * NN * sizeof(double));
+    if (P_losses == NULL) {
+        fprintf(stderr, "*** P_loss array malloc error (NFreq2=%d NN=%zu)\n", NFreq2, (size_t)NN);
         exit(1);
     }
-    memset(T, 0, NFreq2 * NN * sizeof(double));
-    memset(P_losses, 0, NFreq2 * NN * sizeof(double));
-
-    // セルの幅（空間ステップ）を計算
-    double Dx = (Xn[Nx] - Xn[0]) / Nx;
-    double Dy = (Yn[Ny] - Yn[0]) / Ny;
-    double Dz = (Zn[Nz] - Zn[0]) / Nz;
-    sprintf(str, "%.6f %.6f %.6f", Dx, Dy, Dz);
-    fprintf(stdout, "%s\n", str);
-
-    // 初期温度設定
-    for (int i = 0; i < NFreq2 * NN; i++) {
-        T[i] = 20.0;  // 初期温度（20度）
-    }
+    memset(P_losses, 0, (size_t)NFreq2 * NN * sizeof(double));
 
     // HDF5ファイルの作成
     file_id = H5Fcreate(FILE_NAME, H5F_ACC_TRUNC, H5P_DEFAULT, H5P_DEFAULT);
@@ -138,14 +51,6 @@ void solve(int io, double *tdft, FILE *fp) {
     // time step iteration
     int itime;
     double t = 0;
-    //double sigma = 1e3;      // 導電率 [S/m]（適宜変更）
-	int material_id = 0; // 使用したい材料のIDを設定
-	double sigma = get_conductivity(material_id);
-	double epsr = get_relative_permittivity(material_id);
-	double amur = get_relative_permeability(material_id);
-    double mu_double_prime = 1e-3; // 磁気損失係数 [H/m]（適宜変更）
-    //double frequency = 200e12;      // 周波数 [Hz]（適宜変更）
-    //double omega = 2 * M_PI * frequency; // 角周波数 [rad/s]
     for (itime = 0; itime <= Solver.maxiter; itime++) {
 
         // update H
@@ -221,16 +126,6 @@ void solve(int io, double *tdft, FILE *fp) {
         dftNear3d(itime);
         *tdft += cputime() - t0;
 
-        // 発熱量の計算
-        calculatePowerLoss(P_losses, NN, NFreq2, sigma, mu_double_prime, 
-                           cEx_r, cEx_i, cEy_r, cEy_i, cEz_r, cEz_i,
-                           cHx_r, cHx_i, cHy_r, cHy_i, cHz_r, cHz_i, Freq2);
-
-        // 温度の更新
-        //updateTemperature(T, Nx, Ny, Nz, alpha, Dt, P_loss);
-        // 温度の更新
-        updateTemperature(T, NN, NFreq2, alpha, Dt, P_losses, Dx, Dy, Dz);
-
         // average and convergence
         if ((itime % Solver.nout == 0) || (itime == Solver.maxiter)) {
             // average
@@ -249,6 +144,10 @@ void solve(int io, double *tdft, FILE *fp) {
                 fprintf(stdout, "%s\n", str);
                 fflush(fp);
                 fflush(stdout);
+
+                /* 発熱量密度は書き出す直前にだけ計算する
+                   (値は現在の DFT 配列だけで決まるので毎ステップ回す必要がない) */
+                calculatePowerLoss(P_losses);
 
                 // 各時間ステップごとにグループを作成
                 char group_name[32];
@@ -417,7 +316,6 @@ void solve(int io, double *tdft, FILE *fp) {
         }
     }
     // メモリの解放
-    free(T);
     free(P_losses);
 
     // メモリスペース、データセットとデータスペースのクローズ
@@ -607,6 +505,32 @@ void solve(int io, double *tdft, FILE *fp) {
     H5Dclose(dataset_id);
     H5Sclose(dataspace_id);
     H5Tclose(memtype);
+
+    /* 屈折率マップ (metadata/Reflection)。セルごとの材料の sqrt(epsr)。
+       CUDA 版だけが出していたため、CUDA ビルドに切り替えたときだけ GUI に
+       出せるデータが増える (= 逆に言うと他のビルドでは欠ける) 状態だった。
+       全ビルドで同じ内容を出す。 */
+    {
+        hsize_t ref_dims[2] = {(hsize_t)NN, 1};
+        hid_t ref_space = H5Screate_simple(2, ref_dims, NULL);
+        hid_t ref_set = H5Dcreate(metadata_group_id, "Reflection", H5T_NATIVE_DOUBLE,
+                                  ref_space, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+        double *ref = (double *)malloc((size_t)NN * sizeof(double));
+        if (ref == NULL) {
+            fprintf(stderr, "*** Reflection array malloc error (NN=%zu)\n", (size_t)NN);
+            exit(1);
+        }
+        for (int64_t nn = 0; nn < NN; nn++) {
+            ref[nn] = sqrt(Material[iEx[nn]].epsr);
+        }
+        status = H5Dwrite(ref_set, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, ref);
+        if (status < 0) {
+            fprintf(stderr, "Error writing Reflection data\n");
+        }
+        free(ref);
+        H5Dclose(ref_set);
+        H5Sclose(ref_space);
+    }
 
     // メタデータグループのクローズ
     H5Gclose(metadata_group_id);

@@ -84,7 +84,8 @@ CI (Linux ジョブ) が全件を実行し、エネルギー保存と解析解�
 | `rcwa_oblique.ofd` | `orcwa` | 斜め入射 (ブリュースター角)。R_TM≈0, R_TE=0.147929 |
 | `rcwa_metal.ofd` | `orcwa` | 複素誘電率の金属薄膜。R=0.909420, T=0.084430, A>0 |
 | `grating.ofd` | `orcwa` | 周期格子の波長掃引。全点で R+T=1 |
-| `dipole.ofd` | `orcwa` | FDTD (RCWA ではない) |
+| `dipole.ofd` | `orcwa` | FDTD (RCWA ではない)。無損失 (PEC+空気) なので **P_loss は全セル厳密に 0** |
+| `lossy_block.ofd` | `orcwa` | FDTD。電気損失材と磁気損失材のブロック。P_loss がその場所にだけ立つ |
 
 **格子では TM の収束が遅い。** 誘電率境界で法線 E が不連続になるためで、
 RCWA の既知の性質。`grating.ofd` の実測 (λ=461nm):
@@ -153,6 +154,24 @@ R_TE 9e-6 / R_TM 8.7e-5)。**新しい格子サンプルを足すときは、TE 
 - 出力ファイル名: `.ofd` 経路は `time_series_data.h5`、`.orcwa` 経路は
   `-o` で指定した CSV の拡張子を `.h5` に置換したもの。
 
+### ビルド構成による出力の違い (揃えること)
+
+GUI は `time_series_data.h5` を読むので、**ビルド構成でデータセットが欠けると
+機能が黙って落ちる**。4 つのソルバ (`sol/solve.c` / `mpi/solve.c` /
+`cuda/solve.cu` / `cuda_mpi/solve.cu`) は同じデータセットを出す:
+
+| グループ | データセット |
+|---|---|
+| `/data%06d` | `E`, `H`, `P`, `P_loss`, `Surface` |
+| `/metadata` | 格子・時刻・波形などのスカラ/配列, `Surface`, `Reflection` |
+
+`Reflection` はセルごとの屈折率 `sqrt(Material[iEx[nn]].epsr)` を `[NN, 1]` で
+出したもの。以前は CUDA 版だけが持っていた。
+
+**新しいデータセットを足すときは 4 本すべてに入れること。** 直列と MPI の
+一致は `ci/compare_h5.py` が CI で検証する (CUDA 系は GPU が要るため CI では
+ビルドのみ)。
+
 ### 出力先のパス (現状仕様 — 変更しないこと)
 
 `.ofd` 経路の出力 (`rcwa_efficiency.csv` / `time_series_data.h5` /
@@ -170,6 +189,36 @@ GUI (OpenFDTD-X) は入力ファイルのあるディレクトリへ `cd` して
 - これは既知かつ意図的な現状仕様 (2026-08 時点でユーザー判断により維持)。
   GUI から出力先を制御する必要が出たときに、`-out` を RCWA にも
   効かせるかを改めて判断する。
+
+## 発熱量密度 `P_loss` (FDTD)
+
+時間平均の消費電力密度 [W/m^3]:
+
+    P = 1/2 sigma_e |E|^2 + 1/2 sigma_m |H|^2
+
+- **導電率はセルごとの材料から引く**。Yee 格子では E/H の各成分が別の位置にあり、
+  成分ごとに材料 ID (`iEx`/`iEy`/`iEz`, `iHx`/`iHy`/`iHz`) が違うので、
+  成分ごとに `Material[id].esgm` / `Material[id].msgm` を掛ける。
+  実装は `sol/powerloss.c` の `calculatePowerLoss()` に 1 本化してある。
+- 空気 (ID 0) も PEC (ID 1) も `esgm = msgm = 0`。PEC は `C1 = C2 = 0` で E が 0 に
+  固定されるため、完全導体は電力を消費しないモデルになる。
+- 係数 1/2 は `cEx_r` 等が波高値 (peak) の位相子であることを前提にする。
+- **旧実装の壊れ方** (2026-08 に修正): `material_id = 0` (= 空気) の導電率を全セルに
+  使い、磁気損失を `mu'' = 1e-3` のマジック定数にしていた。そのため無損失の
+  `dipole.ofd` でも最大 2.5e11 W/m^3 を返していた。さらに結果を捨てるだけの
+  `updateTemperature()` (温度 T はどこにも出力されない) を毎ステップ回していた。
+- 検証は `ci/check_ploss.py`:
+
+```bash
+# 無損失入力 (dipole.ofd): 全セル厳密に 0
+python3 ci/check_ploss.py lossless time_series_data.h5
+# 損失材あり (lossy_block.ofd): 材料のある場所にだけ立つ / E・H から決まる上限を超えない
+python3 ci/check_ploss.py lossy --sigma-e 0.5 --sigma-m 0.3 time_series_data.h5
+```
+
+- `P_loss` は**直列 / MPI / CUDA / CUDA+MPI の 4 ビルドすべてが出力する**。
+  実装は `sol/powerloss.c` の 1 本で、MPI 系は各 rank が自分の担当範囲を
+  計算して集団書き込みする。
 
 ## 物理規約 (違反すると結果が静かに壊れる)
 
@@ -332,11 +381,11 @@ python3 ci/compare_h5.py <serial>/time_series_data.h5 time_series_data.h5
   出力前に `comm_feed()` / `comm_point()` で rank 0 へ集める
   (これを呼び忘れていて、rank 0 が給電セルを持たない n≥4 で `IFeed` が
   直列と 6.6e-3 ずれていた)。
-- **既知の差分**: `data%06d/P_loss` (発熱量) は直列版 (`sol/solve.c`) にしか
-  なく、MPI 版は未移植。`ci/compare_h5.py` はこれを除外している。
-- CI の `build-mpi` ジョブが n=2,3,4,7 を回し、`ci/compare_h5.py` で
-  直列版との一致 (E/H/P/Surface とメタデータは差 0、Eiter/Hiter のみ
-  総和順序ぶんの許容差) を確認する。
+- CI の `build-mpi` ジョブが n=2,3,4,7 を **無損失 (`dipole.ofd`) と損失材あり
+  (`lossy_block.ofd`) の両方**で回し、`ci/compare_h5.py` で直列版との一致
+  (E/H/P/P_loss/Surface/Reflection とメタデータは差 0、Eiter/Hiter のみ
+  総和順序ぶんの許容差) を確認する。無損失だけだと `P_loss` が全セル 0 で、
+  MPI 側がまるごと壊れていても一致してしまうため両方回す。
 
 ## 落とし穴 (Gotchas)
 

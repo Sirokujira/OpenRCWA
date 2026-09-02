@@ -43,6 +43,8 @@ jobs:
           sudo apt-get install -y clang libc++-dev libc++abi-dev
           # HDF5 出力の構造検証に h5dump を使う
           sudo apt-get install -y hdf5-tools
+          # P_loss の検証に h5py を使う (apt だと python3-numpy ごと引くので PyPI から)
+          python3 -m pip install --break-system-packages --quiet h5py
 
       - name: Configure (CPU only)
         run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DWITH_CUDA=OFF -DWITH_MPI=OFF
@@ -73,6 +75,24 @@ jobs:
           "$GITHUB_WORKSPACE/bin/orcwa" -n 2 dipole.ofd
           grep -q "normal end" orcwa.log
           test -s orcwa.out
+
+      # 発熱量密度 P_loss はセルごとの材料から求めなければならない。
+      # 以前は material_id = 0 (= 空気) の導電率を全セルに使い、磁気損失を
+      # mu'' = 1e-3 のマジック定数にしていたため、PEC + 空気だけの dipole.ofd
+      # でも最大 2.5e11 W/m^3 を返していた (正しくは全セル厳密に 0)。
+      - name: Check P_loss — lossless input must dissipate nothing
+        run: |
+          python3 ci/check_ploss.py lossless /tmp/smoke/time_series_data.h5
+
+      - name: Check P_loss — lossy blocks (material lookup)
+        run: |
+          mkdir -p /tmp/smoke-lossy && cp data/sample/lossy_block.ofd /tmp/smoke-lossy/
+          cd /tmp/smoke-lossy
+          "$GITHUB_WORKSPACE/bin/orcwa" -n 2 lossy_block.ofd
+          grep -q "normal end" orcwa.log
+          # sigma_e / sigma_m は lossy_block.ofd の material 行の最大値
+          python3 "$GITHUB_WORKSPACE/ci/check_ploss.py" lossy \
+            --sigma-e 0.5 --sigma-m 0.3 time_series_data.h5
 
       - name: Smoke test — post processor
         run: |
@@ -259,6 +279,7 @@ jobs:
           name: smoke-logs
           path: |
             /tmp/smoke/*.log
+            /tmp/smoke-lossy/*.log
             /tmp/smoke-rcwa/*.log
             /tmp/smoke-orcwa/*.log
             /tmp/rcwa-unit/*.log
@@ -312,8 +333,15 @@ jobs:
 
       - name: Serial reference run
         run: |
-          mkdir -p /tmp/mpi-ref && cp data/sample/dipole.ofd /tmp/mpi-ref/
+          # cd した後に相対パスを使わないこと (同じ run: ブロック内で cd は残る)
+          mkdir -p /tmp/mpi-ref
+          cp "$GITHUB_WORKSPACE/data/sample/dipole.ofd" /tmp/mpi-ref/
           cd /tmp/mpi-ref && "$GITHUB_WORKSPACE/bin/orcwa" -n 1 dipole.ofd
+          # 損失材ありも比較する。無損失 (dipole) だけだと P_loss が全セル 0 で、
+          # MPI 側の P_loss がまるごと壊れていても一致してしまう。
+          mkdir -p /tmp/mpi-ref-lossy
+          cp "$GITHUB_WORKSPACE/data/sample/lossy_block.ofd" /tmp/mpi-ref-lossy/
+          cd /tmp/mpi-ref-lossy && "$GITHUB_WORKSPACE/bin/orcwa" -n 1 lossy_block.ofd
 
       # 不均等分割 (n=4: 7,7,7,9 / n=7: 4,4,4,4,4,4,6) を含めてハングを検出する。
       # ランナーのコア数に依らず起動できるよう --oversubscribe を付ける。
@@ -322,20 +350,25 @@ jobs:
           mkdir -p /tmp/mpi-run && cp data/sample/dipole.ofd /tmp/mpi-run/
           cd /tmp/mpi-run
           fail=0
+          cp "$GITHUB_WORKSPACE/data/sample/lossy_block.ofd" .
           for n in 2 3 4 7; do
-            rm -f time_series_data.h5
-            if ! timeout 300 mpirun --allow-run-as-root --oversubscribe \
-                 -n $n "$GITHUB_WORKSPACE/bin/orcwa_mpi" dipole.ofd > "n$n.log" 2>&1; then
-              echo "::error::orcwa_mpi -n $n failed or hung"
-              tail -20 "n$n.log"
-              fail=1
-              continue
-            fi
-            if ! python3 "$GITHUB_WORKSPACE/ci/compare_h5.py" \
-                 /tmp/mpi-ref/time_series_data.h5 time_series_data.h5; then
-              echo "::error::MPI output (-n $n) differs from the serial reference"
-              fail=1
-            fi
+            for c in "dipole.ofd /tmp/mpi-ref" "lossy_block.ofd /tmp/mpi-ref-lossy"; do
+              set -- $c
+              in=$1; ref=$2
+              rm -f time_series_data.h5
+              if ! timeout 300 mpirun --allow-run-as-root --oversubscribe \
+                   -n $n "$GITHUB_WORKSPACE/bin/orcwa_mpi" "$in" > "n$n-$in.log" 2>&1; then
+                echo "::error::orcwa_mpi -n $n $in failed or hung"
+                tail -20 "n$n-$in.log"
+                fail=1
+                continue
+              fi
+              if ! python3 "$GITHUB_WORKSPACE/ci/compare_h5.py" \
+                   "$ref/time_series_data.h5" time_series_data.h5; then
+                echo "::error::MPI output (-n $n, $in) differs from the serial reference"
+                fail=1
+              fi
+            done
           done
           exit $fail
 
