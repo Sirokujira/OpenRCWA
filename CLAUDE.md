@@ -10,6 +10,10 @@ OpenFDTD-X (GUI) から QProcess で起動される処理カーネル。
 - **`orcwa_rcwa`** — RCWA 専用ドライバ。`.orcwa` 入力 (`rcwa/RCWAInput` /
   `rcwa/RCWADriver`)。斜め入射・2D 格子・任意偏波・場出力に対応。
 
+`orcwa` は CUDA / MPI の有無によらず**常にビルドされる**。CUDA / MPI 版
+(`orcwa_cuda` / `orcwa_mpi` / `orcwa_cuda_mpi`) は FDTD 専用で、RCWA 入力は
+「orcwa を使え」と案内して止まる (案内先は同じビルドの `bin/orcwa`)。
+
 ## ビルド / テスト
 
 ```bash
@@ -161,6 +165,11 @@ $OLDPWD/bin/orcwa -n 2 grating.ofd && cat rcwa_efficiency.csv
   足すときは次元に使う変数が全 rank で同じか必ず確認する。
 - 給電点・観測点の波形は担当 rank にしか溜まらないので、出力前に
   `comm_feed()` / `comm_point()` で rank 0 に集める。
+- **`_MPI` は MPI 版のターゲットにだけ付ける** (全体定義にしない)。同じビルドで
+  直列の `orcwa` を並べて作るため。
+- 並列 HDF5 の `hdf5.h` は `mpi.h` を取り込むので、`HDF5::HDF5` に `MPI::MPI_C`
+  を INTERFACE で足している。外すと `WITH_MPI=ON` の全ターゲットビルドが
+  `orcwa_post` / `orcwa` の `mpi.h: No such file or directory` で落ちる。
 - 検証は `ci/compare_h5.py <serial.h5> <mpi.h5>`。詳細は `AGENTS.md`。
 
 ## CI
@@ -171,8 +180,10 @@ $OLDPWD/bin/orcwa -n 2 grating.ofd && cat rcwa_efficiency.csv
 (固有値の経路が Linux/macOS = LAPACKE、Windows = Eigen フォールバックと
 異なるため、3 プラットフォームで解析解との一致を確認する意味がある)。
 Linux ジョブはさらに libc++ 構文チェック (macOS 互換性の先行検出) を行う。
-`build-mpi` ジョブは MPI ビルドを不均等分割 (n=4, 7) を含め、無損失
-(`dipole.ofd`) と損失材あり (`lossy_block.ofd`) の両方で実行し、
+`build-mpi` ジョブは MPI 構成で**全ターゲット**をビルドし (`orcwa` /
+`orcwa_mpi` / `orcwa_post` が揃い、`_MPI` が `orcwa_mpi` にだけ付くこと)、
+MPI 構成の `orcwa` で RCWA を解く。さらに MPI ビルドを不均等分割 (n=4, 7) を
+含め、無損失 (`dipole.ofd`) と損失材あり (`lossy_block.ofd`) の両方で実行し、
 `ci/compare_h5.py` で直列版と HDF5 出力が一致することを確認する。
 タグ `v*` push で Release にバイナリ添付。
 

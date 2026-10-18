@@ -348,7 +348,7 @@ planewave = <theta[deg]> <phi[deg]> <pol>
 sudo apt-get install -y openmpi-bin libopenmpi-dev libhdf5-openmpi-dev
 cmake -B build-mpi -DCMAKE_BUILD_TYPE=Release -DWITH_CUDA=OFF -DWITH_MPI=ON \
       -DHDF5_PREFER_PARALLEL=ON -DWITH_RCWA=OFF -DWITH_RCWA_LEGACY_TESTS=OFF
-cmake --build build-mpi -j"$(nproc)" --target orcwa_mpi
+cmake --build build-mpi -j"$(nproc)"   # → bin/orcwa, bin/orcwa_mpi, bin/orcwa_post
 
 # 直列版と一致するか (不均等分割を必ず含める)
 mpirun --oversubscribe -n 4 bin/orcwa_mpi dipole.ofd
@@ -357,6 +357,22 @@ python3 ci/compare_h5.py <serial>/time_series_data.h5 time_series_data.h5
 
 - **`WITH_MPI=ON` には並列 HDF5 が要る**。直列 HDF5 だと `H5Pset_fapl_mpio`
   等が undefined reference になるため、configure で FATAL_ERROR にしてある。
+- **`orcwa` (CPU) は CUDA / MPI の有無によらず常にビルドする。** RCWA 入力を
+  解けるのは RCWA コアに結線された `orcwa` だけで、`orcwa_mpi` / `orcwa_cuda` /
+  `orcwa_cuda_mpi` は「orcwa を使え」と案内して止まる。以前は `orcwa` を
+  CUDA でも MPI でもない構成でしか作らなかったため、MPI/CUDA ビルドには
+  案内先の `orcwa` 自体が無かった。
+- **`_MPI` は MPI 版のターゲット (`orcwa_mpi` / `orcwa_cuda_libmpi` /
+  `orcwa_cuda_mpi`) にだけ付ける。** 全体定義にすると、同じビルドの直列
+  `orcwa` まで `_MPI` 付きでコンパイルされ、`sol/` に `#ifdef _MPI` を足した
+  途端に MPI 構成の `orcwa` だけが壊れる。CI の build-mpi がフラグを直接検査する。
+- **並列 HDF5 の `hdf5.h` は `mpi.h` を取り込む** (`H5public.h`) のに、
+  FindHDF5 の `HDF5::HDF5` は MPI のパスを運ばない。そのため並列 HDF5 では
+  `HDF5::HDF5` に `MPI::MPI_C` を INTERFACE で足している (HDF5 を使う全ターゲット
+  に効く)。以前は `WITH_MPI=ON` で全ターゲットをビルドすると `orcwa_post` が
+  必ず `mpi.h: No such file or directory` で落ちていた (CI は `--target orcwa_mpi`
+  しかビルドしていなかったので気づけなかった)。直列プログラムは `MPI_Init` を
+  呼ばないので直列のまま動く。
 - **`H5Gcreate` / `H5Dcreate` は集団操作**。`if (commRank == 0)` で囲うと
   他 rank が `H5Fclose` (これも集団) で待ち続けてデッドロックする。
   生の書き込み (`H5Dwrite`) だけは INDEPENDENT 転送で rank 0 に限定してよい。
@@ -381,6 +397,10 @@ python3 ci/compare_h5.py <serial>/time_series_data.h5 time_series_data.h5
   出力前に `comm_feed()` / `comm_point()` で rank 0 へ集める
   (これを呼び忘れていて、rank 0 が給電セルを持たない n≥4 で `IFeed` が
   直列と 6.6e-3 ずれていた)。
+- CI の `build-mpi` ジョブは**全ターゲットをビルド**し (`orcwa` / `orcwa_mpi` /
+  `orcwa_post` が揃うこと、`_MPI` が `orcwa_mpi` にだけ付いていること)、
+  MPI 構成の `orcwa` で RCWA (grating, R+T=1) を解き、その `orcwa` の FDTD 出力が
+  純粋な直列構成の `orcwa` と一致することを確認する。
 - CI の `build-mpi` ジョブが n=2,3,4,7 を **無損失 (`dipole.ofd`) と損失材あり
   (`lossy_block.ofd`) の両方**で回し、`ci/compare_h5.py` で直列版との一致
   (E/H/P/P_loss/Surface/Reflection とメタデータは差 0、Eiter/Hiter のみ
