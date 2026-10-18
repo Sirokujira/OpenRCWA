@@ -323,8 +323,48 @@ jobs:
             -DWITH_CUDA=OFF -DWITH_MPI=ON -DHDF5_PREFER_PARALLEL=ON \
             -DWITH_RCWA=OFF -DWITH_RCWA_LEGACY_TESTS=OFF
 
-      - name: Build orcwa_mpi
-        run: cmake --build build-mpi -j"$(nproc)" --target orcwa_mpi
+      # --target を付けずに全ターゲットをビルドする。利用者が実行するのは
+      # この形で、以前は orcwa_post が "mpi.h: No such file or directory" で
+      # 必ず落ちていた (並列 HDF5 の hdf5.h が mpi.h を取り込むのに、
+      # HDF5::HDF5 が MPI のパスを運ばない)。orcwa_mpi だけをビルドして
+      # いたので CI では気づけなかった。
+      - name: Build all targets (MPI config)
+        run: |
+          cmake --build build-mpi -j"$(nproc)"
+          # MPI 構成でも RCWA を解ける orcwa (CPU) が並んでできていること。
+          # orcwa_mpi は RCWA 入力を「orcwa を使え」と案内して止まるので、
+          # 案内先が同じビルドに無いと RCWA が使えない。
+          for b in orcwa orcwa_mpi orcwa_post; do
+            test -x "bin/$b" || { echo "::error::bin/$b was not built in the MPI config"; exit 1; }
+          done
+          # _MPI は MPI 版のターゲットにだけ付ける。全体定義に戻すと、同じ
+          # ビルドの直列 orcwa まで _MPI 付きでコンパイルされる (sol/ に
+          # #ifdef _MPI を足した途端に MPI 構成の orcwa だけが壊れる)。
+          grep -q -- "-D_MPI" build-mpi/CMakeFiles/orcwa_mpi.dir/flags.make \
+            || { echo "::error::orcwa_mpi lost -D_MPI"; exit 1; }
+          if grep -q -- "-D_MPI" build-mpi/CMakeFiles/orcwa.dir/flags.make; then
+            echo "::error::orcwa (serial) is compiled with -D_MPI"; exit 1
+          fi
+          # 後段の直列リファレンスのビルドで bin/orcwa が上書きされるので退避する
+          cp bin/orcwa /tmp/orcwa-mpicfg
+
+      - name: RCWA with orcwa built in the MPI config
+        run: |
+          mkdir -p /tmp/mpi-rcwa
+          cp "$GITHUB_WORKSPACE/data/sample/grating.ofd" /tmp/mpi-rcwa/
+          cd /tmp/mpi-rcwa
+          /tmp/orcwa-mpicfg -n 2 grating.ofd > grating.log 2>&1
+          grep -q "normal end" grating.log
+          # 全周波数・両偏波でエネルギー保存 (無損失の誘電体格子)
+          awk -F, 'NR>1 {
+              if (($3+$4-1)^2 > 9e-6 || ($5+$6-1)^2 > 9e-6) {
+                print "energy not conserved:", $0; exit 1 } }' rcwa_efficiency.csv
+          # orcwa_mpi は RCWA 入力を計算せず、orcwa へ案内して非 0 で止まる
+          if mpirun --allow-run-as-root --oversubscribe -n 2 \
+               "$GITHUB_WORKSPACE/bin/orcwa_mpi" grating.ofd > reject.log 2>&1; then
+            echo "::error::orcwa_mpi accepted RCWA input"; exit 1
+          fi
+          grep -q "Run orcwa instead" reject.log
 
       - name: Configure / build serial reference
         run: |
@@ -342,6 +382,16 @@ jobs:
           mkdir -p /tmp/mpi-ref-lossy
           cp "$GITHUB_WORKSPACE/data/sample/lossy_block.ofd" /tmp/mpi-ref-lossy/
           cd /tmp/mpi-ref-lossy && "$GITHUB_WORKSPACE/bin/orcwa" -n 1 lossy_block.ofd
+
+      # MPI 構成で並べて作った orcwa (並列 HDF5 + MPI ヘッダ付きでリンク) が、
+      # 純粋な直列構成の orcwa と同じ HDF5 を出すこと。
+      - name: orcwa from the MPI config matches the serial build
+        run: |
+          mkdir -p /tmp/mpicfg-orcwa
+          cp "$GITHUB_WORKSPACE/data/sample/dipole.ofd" /tmp/mpicfg-orcwa/
+          cd /tmp/mpicfg-orcwa && /tmp/orcwa-mpicfg -n 1 dipole.ofd > run.log 2>&1
+          python3 "$GITHUB_WORKSPACE/ci/compare_h5.py" \
+            /tmp/mpi-ref/time_series_data.h5 time_series_data.h5
 
       # 不均等分割 (n=4: 7,7,7,9 / n=7: 4,4,4,4,4,4,6) を含めてハングを検出する。
       # ランナーのコア数に依らず起動できるよう --oversubscribe を付ける。

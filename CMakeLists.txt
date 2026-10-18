@@ -83,13 +83,12 @@ endif()
 
 # MPI を使用するかどうかを設定するオプションを追加
 option(WITH_MPI "Enable MPI support" OFF)
-# オプションに基づいて _MPI を定義
+# _MPI は MPI 版のターゲット (orcwa_mpi / orcwa_cuda_mpi) にだけ付ける。
+# 全体に付けると、同じビルドで並べて作る直列の orcwa まで _MPI 付きで
+# コンパイルされ、sol/ に #ifdef _MPI を足した途端に MPI 構成の orcwa だけが
+# 壊れる (MPI_Init を呼ばずに MPI 関数を呼ぶ)。
 if(WITH_MPI)
     find_package(MPI REQUIRED C)
-    add_compile_definitions(_MPI)
-    message(STATUS "_MPI マクロが定義されました")
-else()
-    message(STATUS "_MPI マクロは定義されていません")
 endif()
 
 # MKL はオプション扱い: 見つかれば LAPACKE 経由の固有値ソルバを使用し、
@@ -192,20 +191,38 @@ set(EXECUTABLE_OUTPUT_PATH ${CMAKE_BINARY_DIR})
 
 if(WITH_MPI)
     file(GLOB MPI_SOURCES "mpi/*.c")
-else()
-    file(GLOB SOURCES "sol/*.c")
-    # setupNear.c は旧バージョン由来で未使用 (orcwa.h にない Fnorm を参照する)
-    list(REMOVE_ITEM SOURCES "${CMAKE_SOURCE_DIR}/sol/setupNear.c")
 endif()
+# 直列ソルバ (orcwa) のソース。orcwa は CUDA / MPI の有無によらず常にビルド
+# するので、ここも常に定義する。
+file(GLOB SOURCES "sol/*.c")
+# setupNear.c は旧バージョン由来で未使用 (orcwa.h にない Fnorm を参照する)
+list(REMOVE_ITEM SOURCES "${CMAKE_SOURCE_DIR}/sol/setupNear.c")
 
 # HDF5パッケージの検索
 find_package(HDF5 REQUIRED COMPONENTS C)
 if (HDF5_FOUND)
     message(STATUS "HDF5 が見つかりました。HDF5 サポートを有効にします。")
     if (HDF5_IS_PARALLEL)
-      if (NOT WITH_MPI)
-        message(STATUS "HDF5 is built with parallel support requiring MPI, but MPI is disabled")
-        message(STATUS "Disabling HDF5 support")
+      # 並列 HDF5 の hdf5.h は mpi.h を取り込む (H5public.h)。ところが
+      # FindHDF5 の HDF5::HDF5 は MPI のインクルードパスもライブラリも運ばない
+      # ので、HDF5 を使うターゲットは "mpi.h: No such file or directory" で
+      # コンパイルに失敗する。実際 WITH_MPI=ON で全ターゲットをビルドすると
+      # orcwa_post が必ず落ちていた (CI は orcwa_mpi しかビルドしないので
+      # 気づかれなかった)。HDF5::HDF5 に MPI を足して、HDF5 を使う全ターゲット
+      # (直列の orcwa / orcwa_post を含む) に効かせる。
+      # 直列プログラムは MPI_Init を呼ばないので直列のまま動く
+      # (並列 HDF5 は H5P_DEFAULT で開けば直列にも使える)。
+      if (NOT TARGET MPI::MPI_C)
+        find_package(MPI QUIET COMPONENTS C)
+      endif()
+      if (TARGET MPI::MPI_C)
+        target_link_libraries(HDF5::HDF5 INTERFACE MPI::MPI_C)
+        message(STATUS "HDF5 は並列版: HDF5 を使うターゲットに MPI (ヘッダ/ライブラリ) を付けます")
+      else()
+        message(FATAL_ERROR
+          "見つかった HDF5 は並列版 (mpi.h が要る) ですが MPI が見つかりません。\n"
+          "  直列 HDF5 を使う: sudo apt-get install libhdf5-dev (HDF5_PREFER_PARALLEL を外す)\n"
+          "  または MPI を入れる: sudo apt-get install libopenmpi-dev")
       endif()
     else()
       message(STATUS "HDF5 is not built with parallel support.")
@@ -381,6 +398,7 @@ if (WITH_CUDA)
             target_link_libraries(orcwa_cuda_libmpi PRIVATE ${CUDA_LIBRARIES})
             target_link_libraries(orcwa_cuda_libmpi PRIVATE OpenMP::OpenMP_C Threads::Threads ${MATH_LIB})
             target_link_libraries(orcwa_cuda_libmpi PRIVATE MPI::MPI_C HDF5::HDF5)
+            target_compile_definitions(orcwa_cuda_libmpi PRIVATE _MPI)
 
             add_executable(orcwa_cuda_mpi src/cuda_mpi_Main.cu)
             if(MSVC)
@@ -392,6 +410,7 @@ if (WITH_CUDA)
             target_link_libraries(orcwa_cuda_mpi PRIVATE ${CUDA_LIBRARIES})
             target_link_libraries(orcwa_cuda_mpi PRIVATE OpenMP::OpenMP_C Threads::Threads ${MATH_LIB})
             target_link_libraries(orcwa_cuda_mpi PRIVATE MPI::MPI_C HDF5::HDF5)
+            target_compile_definitions(orcwa_cuda_mpi PRIVATE _MPI)
         else ()
             # Add CUDA source files
             set(CUDA_SOURCES
@@ -533,35 +552,41 @@ else()
 
         target_link_libraries(orcwa_mpi PRIVATE OpenMP::OpenMP_C Threads::Threads ${MATH_LIB})
         target_link_libraries(orcwa_mpi PRIVATE MPI::MPI_C HDF5::HDF5)
-    else ()
-        # RCWA コア (rcwa/*.cpp) を sol/rcwa_bridge.cpp 経由で orcwa に結線する
-        add_executable(orcwa ${SOURCES} src/sol_Main.c
-            sol/rcwa_bridge.cpp sol/rcwa_hdf5.c ${RCWA_SRC_FILES})
-        if(MSVC)
-            # MSVC の既定スタック 1MB では FDTD ループが不足する
-            target_link_options(orcwa PRIVATE /STACK:16777216)
-        endif()
-
-        # Eigen 内部の OpenMP 並列 GEMM を無効化する。
-        # macOS (AppleClang + -Xclang -fopenmp + libomp) では並列 GEMM が
-        # 計算結果を壊し、RCWA の回折効率が非決定的に破綻する。
-        # RCWA の行列サイズでは並列化の利得も無い。
-        target_compile_definitions(orcwa PRIVATE EIGEN_DONT_PARALLELIZE)
-
-        # Include directories for header files
-        target_include_directories(orcwa PUBLIC "${PROJECT_SOURCE_DIR}/include")
-
-        # Link OpenMP libraries to the target
-        # (C++ ソースを含むためリンカは CXX、MKL_LIBRARIES は
-        #  MKL 未検出時 LAPACK/LAPACKE を指す)
-        if(OpenMP_C_FOUND)
-            target_link_libraries(orcwa PRIVATE OpenMP::OpenMP_C OpenMP::OpenMP_CXX
-                ${MATH_LIB} HDF5::HDF5 ${MKL_LIBRARIES} ${TBB_LIBRARIES})
-        else()
-            target_link_libraries(orcwa PRIVATE ${MATH_LIB} HDF5::HDF5
-                ${MKL_LIBRARIES} ${TBB_LIBRARIES})
-        endif()
+        target_compile_definitions(orcwa_mpi PRIVATE _MPI)
     endif()
+endif()
+
+# ── orcwa (CPU + RCWA コア) は構成によらず常にビルドする ──────────────────
+# RCWA 入力 (rcwalayer) を解けるのは RCWA コアに結線された orcwa だけで、
+# orcwa_mpi / orcwa_cuda / orcwa_cuda_mpi は "orcwa を使え" と案内して止まる。
+# 以前は orcwa を CUDA でも MPI でもない構成でしか作らなかったため、
+# WITH_MPI / WITH_CUDA を有効にしたビルドには案内先の orcwa 自体が無かった。
+# RCWA コア (rcwa/*.cpp) を sol/rcwa_bridge.cpp 経由で orcwa に結線する
+add_executable(orcwa ${SOURCES} src/sol_Main.c
+    sol/rcwa_bridge.cpp sol/rcwa_hdf5.c ${RCWA_SRC_FILES})
+if(MSVC)
+    # MSVC の既定スタック 1MB では FDTD ループが不足する
+    target_link_options(orcwa PRIVATE /STACK:16777216)
+endif()
+
+# Eigen 内部の OpenMP 並列 GEMM を無効化する。
+# macOS (AppleClang + -Xclang -fopenmp + libomp) では並列 GEMM が
+# 計算結果を壊し、RCWA の回折効率が非決定的に破綻する。
+# RCWA の行列サイズでは並列化の利得も無い。
+target_compile_definitions(orcwa PRIVATE EIGEN_DONT_PARALLELIZE)
+
+# Include directories for header files
+target_include_directories(orcwa PUBLIC "${PROJECT_SOURCE_DIR}/include")
+
+# Link OpenMP libraries to the target
+# (C++ ソースを含むためリンカは CXX、MKL_LIBRARIES は
+#  MKL 未検出時 LAPACK/LAPACKE を指す)
+if(OpenMP_C_FOUND)
+    target_link_libraries(orcwa PRIVATE OpenMP::OpenMP_C OpenMP::OpenMP_CXX
+        ${MATH_LIB} HDF5::HDF5 ${MKL_LIBRARIES} ${TBB_LIBRARIES})
+else()
+    target_link_libraries(orcwa PRIVATE ${MATH_LIB} HDF5::HDF5
+        ${MKL_LIBRARIES} ${TBB_LIBRARIES})
 endif()
 
 option(WITH_POST "Enable Prepost Tool" ON)
@@ -571,7 +596,6 @@ if (WITH_POST)
         ${CMAKE_SOURCE_DIR}/sol/nearfield_c.c
         ${CMAKE_SOURCE_DIR}/sol/farfield.c
         ${CMAKE_SOURCE_DIR}/sol/outputCoupling.c
-        ${CMAKE_SOURCE_DIR}/sol/powerloss.c
         ${CMAKE_SOURCE_DIR}/sol/utils.c
         ${CMAKE_SOURCE_DIR}/sol/ev3d.c
     )
