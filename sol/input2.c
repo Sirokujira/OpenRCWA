@@ -277,8 +277,6 @@ void setup_planewave2(void)
 // plane wave
 void setup_planewave(void)
 {
-    printf("setup_planewave.\n");
-
     const double cost = cos(Planewave.theta * DTOR);
     const double sint = sin(Planewave.theta * DTOR);
     const double cosp = cos(Planewave.phi   * DTOR);
@@ -300,8 +298,6 @@ void setup_planewave(void)
     Planewave.ri[0] = - r1[0];
     Planewave.ri[1] = - r1[1];
     Planewave.ri[2] = - r1[2];
-    printf("propagation vector.\n");
-    printf("%.10f %.10f %.10f\n", Planewave.r0[0], Planewave.r0[1], Planewave.r0[2]);
 
     // E
     if      (Planewave.pol == 1) {
@@ -316,30 +312,27 @@ void setup_planewave(void)
         Planewave.ei[1] = + p1[1];
         Planewave.ei[2] = + p1[2];
     }
-    printf("E.\n");
-    printf("%.10f %.10f %.10f\n", Planewave.ei[0], Planewave.ei[1], Planewave.ei[2]);
 
     // H = E X r
     Planewave.hi[0] = (Planewave.ei[1] * r1[2]) - (Planewave.ei[2] * r1[1]);
     Planewave.hi[1] = (Planewave.ei[2] * r1[0]) - (Planewave.ei[0] * r1[2]);
     Planewave.hi[2] = (Planewave.ei[0] * r1[1]) - (Planewave.ei[1] * r1[0]);
-    printf("H.\n");
-    printf("%.10f %.10f %.10f\n", Planewave.hi[0], Planewave.hi[1], Planewave.hi[2]);
 
     // initial position
     const double f0 = (Freq2[0] + Freq2[NFreq2 - 1]) / 2;
     const double r = sqrt((Xn[0] - Xn[Nx]) * (Xn[0] - Xn[Nx]) +
                           (Yn[0] - Yn[Ny]) * (Yn[0] - Yn[Ny]) +
                           (Zn[0] - Zn[Nz]) * (Zn[0] - Zn[Nz])) / 2 + (0.5 * C / f0);
-    //const double r = 10;
-    printf("%.10f\n", r); // 0.000003
 
+    /* 基準位置 r0 は領域中心から入射の上流側へ r (外接球半径 + λ0/2) 離した点。
+       finc() はパルス中心が r0 を t=0 に通る波形なので、こうしておくと t=0 で
+       入射波はまだ領域に届いていない (散乱界定式化の初期条件 = 散乱界 0 と整合)。
+       以前は r0[2] を 0.5 μm に固定で上書きしていたため、領域の位置・寸法・
+       入射角によらず z 方向の基準がずれ、t=0 で入射パルスが領域内にあった
+       (PEC 球の後方散乱 RCS が Mie 解から最大 1.65 dB ずれ、収束もしなかった)。 */
     Planewave.r0[0] = ((Xn[0] + Xn[Nx]) / 2 - (r * Planewave.ri[0]));
     Planewave.r0[1] = ((Yn[0] + Yn[Ny]) / 2 - (r * Planewave.ri[1]));
     Planewave.r0[2] = ((Zn[0] + Zn[Nz]) / 2 - (r * Planewave.ri[2]));
-    Planewave.r0[2] = 0.0000005;
-    printf("initial position.\n");
-    printf("%.10f %.10f %.10f\n", Planewave.r0[0], Planewave.r0[1], Planewave.r0[2]);
 
     // waveform parameter(ガウス微分パルス)
     Planewave.ai = 4 / (1.27 / f0);

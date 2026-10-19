@@ -181,7 +181,9 @@ $OLDPWD/bin/orcwa -n 2 grating.ofd && cat rcwa_efficiency.csv
 `test_rcwa_input` (単体) と `orcwa_rcwa` の Fresnel スモークを実行する
 (固有値の経路が Linux/macOS = LAPACKE、Windows = Eigen フォールバックと
 異なるため、3 プラットフォームで解析解との一致を確認する意味がある)。
-Linux ジョブはさらに libc++ 構文チェック (macOS 互換性の先行検出) を行う。
+Linux ジョブはさらに libc++ 構文チェック (macOS 互換性の先行検出) と、
+FDTD 平面波入射の検証 (`pec_sphere_rcs.ofd` の後方散乱 RCS を Mie 級数と比較、
+`ci/check_mie.py`) を行う。MPI ジョブも斜め入射・H 偏波で同じ比較をする。
 `build-mpi` ジョブは MPI 構成で**全ターゲット**をビルドし (`orcwa` /
 `orcwa_mpi` / `orcwa_post` が揃い、`_MPI` が `orcwa_mpi` にだけ付くこと)、
 MPI 構成の `orcwa` で RCWA を解く。さらに MPI ビルドを不均等分割 (n=4, 7) を

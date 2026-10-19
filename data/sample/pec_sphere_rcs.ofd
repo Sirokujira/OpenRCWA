@@ -1,0 +1,15 @@
+OpenRCWA 4 2
+title = PEC sphere RCS (Mie)
+xmesh = -0.25 50 0.25
+ymesh = -0.25 50 0.25
+zmesh = -0.25 50 0.25
+geometry = 1 2 -0.1 0.1 -0.1 0.1 -0.1 0.1
+planewave = 0 0 1
+abc = 1 5 2 1e-5
+frequency1 = 3e8 9e8 6
+frequency2 = 3e8 9e8 6
+solver = 3000 50 1e-3
+plotfar1d = X 72
+far1dcomponent = 1 0 0
+far1ddb = 1
+end
