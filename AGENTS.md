@@ -136,7 +136,7 @@ R_TE 9e-6 / R_TM 8.7e-5)。**新しい格子サンプルを足すときは、TE 
 | パス | 内容 |
 |---|---|
 | `/metadata/` | `Dt`, `VFeed`, `IFeed`, `VPoint`, `Eiter`, `Hiter`, メッシュ (`Xn`/`Xc` 等), `input_impedance`, `s_parameters` ほか |
-| `/data%06d/` | 時間ステップごとの `E`, `H`, `P`, `P_loss`, `Surface` |
+| `/data%06d/` | 時間ステップごとの `E`, `H`, `P`, `P_loss` |
 
 **RCWA 経路** (`sol/rcwa_hdf5.c` が出力。`.ofd` / `.orcwa` 共通):
 
@@ -162,11 +162,23 @@ GUI は `time_series_data.h5` を読むので、**ビルド構成でデータセ
 
 | グループ | データセット |
 |---|---|
-| `/data%06d` | `E`, `H`, `P`, `P_loss`, `Surface` |
-| `/metadata` | 格子・時刻・波形などのスカラ/配列, `Surface`, `Reflection` |
+| `/data%06d` | `E`, `H`, `P`, `P_loss` |
+| `/metadata` | 格子・時刻・波形などのスカラ/配列, `Reflection` |
 
 `Reflection` はセルごとの屈折率 `sqrt(Material[iEx[nn]].epsr)` を `[NN, 1]` で
 出したもの。以前は CUDA 版だけが持っていた。
+
+**遠方界用の近傍界サーフェス (`Surface`) は HDF5 に出さない**。以前は
+`/data%06d/Surface` と `/metadata/NSurface`・`/metadata/Surface` を書いていたが、
+`NSurface` と `SurfaceEx` 等は `solve()` の**後**の `outputChars()`
+(`alloc_farfield()` / `setup_farfield()`) で初めて設定されるため、HDF5 を書く
+`solve()` の中では常に `NSurface = 0` で、全ビルドで中身が全要素 0 だった
+(per-step 側は次元も `NSurface` ではなく `NN`)。GUI (OpenFDTD-X) も
+`orcwa_post` も読んでいない。並列 HDF5 は領域を先に確保するため、MPI 版では
+このゼロ領域が dipole でファイルの 43% (42.6 MB / 99.8 MB) を占めていた。
+遠方界は従来どおり `orcwa.out` (`writeout`) 経由で `orcwa_post` が計算する。
+HDF5 から遠方界を出したくなったら、`outputChars()` の後に最終 DFT から
+`[NFreq2][NSurface]` で書くこと (時間ステップごとに書く意味は無い)。
 
 **新しいデータセットを足すときは 4 本すべてに入れること。** 直列と MPI の
 一致は `ci/compare_h5.py` が CI で検証する (CUDA 系は GPU が要るため CI では
@@ -379,7 +391,7 @@ python3 ci/compare_h5.py <serial>/time_series_data.h5 time_series_data.h5
 - **集団 `H5Dcreate` はデータ空間の次元が全 rank で一致していなければならない**。
   ここが実際に踏んだ最大の罠で、rank ローカルな値を次元に使うと
   **均等分割では顕在化せず不均等分割でだけハングする**。実測:
-  - `Surface` データセットの第 3 次元に rank ローカルの `NN`
+  - (現在は削除済みの) `Surface` データセットの第 3 次元に rank ローカルの `NN`
     (`sol/setupSize.c` の `iMax/jMax/kMax` 依存) を使っていた
     → n=2,3,5,6 は通り **n=4 (7,7,7,9) / n=7 (4,4,4,4,4,4,6) でハング**。
     gdb で見ると 3 rank が `H5FD_truncate`→`MPI_File_set_size`、
@@ -403,7 +415,7 @@ python3 ci/compare_h5.py <serial>/time_series_data.h5 time_series_data.h5
   純粋な直列構成の `orcwa` と一致することを確認する。
 - CI の `build-mpi` ジョブが n=2,3,4,7 を **無損失 (`dipole.ofd`) と損失材あり
   (`lossy_block.ofd`) の両方**で回し、`ci/compare_h5.py` で直列版との一致
-  (E/H/P/P_loss/Surface/Reflection とメタデータは差 0、Eiter/Hiter のみ
+  (E/H/P/P_loss/Reflection とメタデータは差 0、Eiter/Hiter のみ
   総和順序ぶんの許容差) を確認する。無損失だけだと `P_loss` が全セル 0 で、
   MPI 側がまるごと壊れていても一致してしまうため両方回す。
 

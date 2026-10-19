@@ -276,35 +276,13 @@ void solve(int io, double *tdft, FILE *fp)
                 H5Dclose(dataset_id);
                 H5Sclose(dataspace_id);
 
-                // 複素数用のHDF5データ型を定義
-                hid_t complex_datatype = H5Tcreate(H5T_COMPOUND, sizeof(d_complex_t));
-                H5Tinsert(complex_datatype, "real", HOFFSET(d_complex_t, r), H5T_NATIVE_DOUBLE);
-                H5Tinsert(complex_datatype, "imag", HOFFSET(d_complex_t, i), H5T_NATIVE_DOUBLE);
-
-                // Surfaceフィールドデータセットの作成と書き込み
-                hsize_t surf_dims[4] = {1, NFreq2, NN, 6};
-                dataspace_id = H5Screate_simple(4, surf_dims, NULL);
-                dataset_id = H5Dcreate(group_id, "Surface", complex_datatype, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-
-                for (int ifreq = 0; ifreq < NFreq2; ifreq++) {
-                    //int64_t surf0 = ifreq * NSurface;
-                    for (int surf = 0; surf < NSurface; surf++) {
-                        d_complex_t surf_value[6] = {
-                            SurfaceEx[ifreq][surf], SurfaceEy[ifreq][surf], SurfaceEz[ifreq][surf],
-                            SurfaceHx[ifreq][surf], SurfaceHy[ifreq][surf], SurfaceHz[ifreq][surf]
-                        };
-
-                        hsize_t surf_offset[4] = {0, ifreq, surf, 0};
-                        hsize_t surf_count[4] = {1, 1, 1, 6};
-                        H5Sselect_hyperslab(dataspace_id, H5S_SELECT_SET, surf_offset, NULL, surf_count, NULL);
-                        status = H5Dwrite(dataset_id, complex_datatype, memspace_id, dataspace_id, H5P_DEFAULT, surf_value);
-                        if (status < 0) {
-                            fprintf(stderr, "Error writing H data at itime=%d, ifreq=%d, surf=%d\n", itime, ifreq, surf);
-                        }
-                    }
-                }
-                H5Dclose(dataset_id);
-                H5Sclose(dataspace_id);
+                /* 近傍界サーフェス (遠方界計算用) はここには出さない。
+                   NSurface / SurfaceEx 等は solve() 後の outputChars() で
+                   初めて設定されるため、以前ここで作っていた /dataNNNNNN/Surface は
+                   全ビルドで常に全要素 0 だった (しかも次元が NN)。並列 HDF5 では
+                   領域が先に確保されるので、ゼロのまま MPI 版のファイルの 4 割を
+                   占めていた。遠方界は orcwa.out (writeout) 経由で orcwa_post が
+                   計算する。 */
 
                 // Pフィールドデータセットの作成と書き込み（仮の例）
                 hsize_t p_dims[4] = {1, NFreq2, NN, 3};
@@ -531,30 +509,8 @@ void solve(int io, double *tdft, FILE *fp)
     }
     
     fprintf(stdout, "meta7.\n");
-    // Surfaceデータの書き込み
-    dataspace_id = H5Screate(H5S_SCALAR);
-    dataset_id = H5Dcreate(metadata_group_id, "NSurface", H5T_NATIVE_INT, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-    status = H5Dwrite(dataset_id, H5T_NATIVE_INT, H5S_ALL, H5S_ALL, H5P_DEFAULT, &NSurface);
-    H5Dclose(dataset_id);
-    H5Sclose(dataspace_id);
-
-    // surface_t構造体に対応する複合データ型を定義
-    hid_t memtype = H5Tcreate(H5T_COMPOUND, sizeof(surface_t));
-    H5Tinsert(memtype, "nx", HOFFSET(surface_t, nx), H5T_NATIVE_DOUBLE);
-    H5Tinsert(memtype, "ny", HOFFSET(surface_t, ny), H5T_NATIVE_DOUBLE);
-    H5Tinsert(memtype, "nz", HOFFSET(surface_t, nz), H5T_NATIVE_DOUBLE);
-    H5Tinsert(memtype, "x", HOFFSET(surface_t, x), H5T_NATIVE_DOUBLE);
-    H5Tinsert(memtype, "y", HOFFSET(surface_t, y), H5T_NATIVE_DOUBLE);
-    H5Tinsert(memtype, "z", HOFFSET(surface_t, z), H5T_NATIVE_DOUBLE);
-    H5Tinsert(memtype, "ds", HOFFSET(surface_t, ds), H5T_NATIVE_DOUBLE);
-
-    hsize_t surface_dims[1] = {NSurface};
-    dataspace_id = H5Screate_simple(1, surface_dims, NULL);
-    dataset_id = H5Dcreate(metadata_group_id, "Surface", memtype, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-    status = H5Dwrite(dataset_id, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, Surface);
-    H5Dclose(dataset_id);
-    H5Sclose(dataspace_id);
-    H5Tclose(memtype);
+    /* metadata/NSurface・metadata/Surface は出さない (per-step の Surface と
+       同じ理由で、solve() の時点では NSurface = 0 の空データだった)。 */
 
     fprintf(stdout, "meta8.\n");
     // Refrection データの書き込み

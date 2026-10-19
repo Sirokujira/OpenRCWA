@@ -124,9 +124,11 @@ $OLDPWD/bin/orcwa -n 2 grating.ofd && cat rcwa_efficiency.csv
 - 検証は `ci/check_ploss.py lossless|lossy`。損失材ありのサンプルは
   `data/sample/lossy_block.ofd`。
 - `P_loss` は直列 / MPI / CUDA / CUDA+MPI の 4 ビルドすべてが出す。
-- **HDF5 のデータセットは 4 ビルドで揃える**。`/data%06d` = `E`/`H`/`P`/`P_loss`/
-  `Surface`、`/metadata` に `Reflection` (セルごとの屈折率)。GUI は同じファイルを
+- **HDF5 のデータセットは 4 ビルドで揃える**。`/data%06d` = `E`/`H`/`P`/`P_loss`、
+  `/metadata` に `Reflection` (セルごとの屈折率)。GUI は同じファイルを
   読むので、片方にしか無いと機能が黙って落ちる。新規追加は 4 本すべてに入れる。
+- 遠方界用の `Surface` は HDF5 に**出さない** (`solve()` の時点では `NSurface = 0`
+  で常に全要素 0 だった。設定は後段の `outputChars()`)。遠方界は `orcwa.out` 経由。
 
 ## 移植性
 
