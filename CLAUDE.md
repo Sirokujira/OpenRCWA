@@ -124,9 +124,11 @@ $OLDPWD/bin/orcwa -n 2 grating.ofd && cat rcwa_efficiency.csv
 - 検証は `ci/check_ploss.py lossless|lossy`。損失材ありのサンプルは
   `data/sample/lossy_block.ofd`。
 - `P_loss` は直列 / MPI / CUDA / CUDA+MPI の 4 ビルドすべてが出す。
-- **HDF5 のデータセットは 4 ビルドで揃える**。`/data%06d` = `E`/`H`/`P`/`P_loss`/
-  `Surface`、`/metadata` に `Reflection` (セルごとの屈折率)。GUI は同じファイルを
+- **HDF5 のデータセットは 4 ビルドで揃える**。`/data%06d` = `E`/`H`/`P`/`P_loss`、
+  `/metadata` に `Reflection` (セルごとの屈折率)。GUI は同じファイルを
   読むので、片方にしか無いと機能が黙って落ちる。新規追加は 4 本すべてに入れる。
+- 遠方界用の `Surface` は HDF5 に**出さない** (`solve()` の時点では `NSurface = 0`
+  で常に全要素 0 だった。設定は後段の `outputChars()`)。遠方界は `orcwa.out` 経由。
 
 ## 移植性
 
@@ -179,7 +181,9 @@ $OLDPWD/bin/orcwa -n 2 grating.ofd && cat rcwa_efficiency.csv
 `test_rcwa_input` (単体) と `orcwa_rcwa` の Fresnel スモークを実行する
 (固有値の経路が Linux/macOS = LAPACKE、Windows = Eigen フォールバックと
 異なるため、3 プラットフォームで解析解との一致を確認する意味がある)。
-Linux ジョブはさらに libc++ 構文チェック (macOS 互換性の先行検出) を行う。
+Linux ジョブはさらに libc++ 構文チェック (macOS 互換性の先行検出) と、
+FDTD 平面波入射の検証 (`pec_sphere_rcs.ofd` の後方散乱 RCS を Mie 級数と比較、
+`ci/check_mie.py`) を行う。MPI ジョブも斜め入射・H 偏波で同じ比較をする。
 `build-mpi` ジョブは MPI 構成で**全ターゲット**をビルドし (`orcwa` /
 `orcwa_mpi` / `orcwa_post` が揃い、`_MPI` が `orcwa_mpi` にだけ付くこと)、
 MPI 構成の `orcwa` で RCWA を解く。さらに MPI ビルドを不均等分割 (n=4, 7) を

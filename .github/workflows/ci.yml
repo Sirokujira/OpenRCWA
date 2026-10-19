@@ -99,6 +99,19 @@ jobs:
           cd /tmp/smoke
           "$GITHUB_WORKSPACE/bin/orcwa_post" -n 2 dipole.ofd
 
+      # FDTD 平面波入射 (GUI の散乱 / RCS タブの経路)。PEC 球の後方散乱断面積を
+      # Mie 級数と比較する。平面波の基準位置 r0 を 0.5 μm に固定で上書きする
+      # バグがあり、入射パルスが t=0 で領域内にあって結果が崩れていた
+      # (収束もせず max steps まで回る)。収束したことも確認する。
+      - name: Plane wave — PEC sphere backscatter vs Mie
+        run: |
+          mkdir -p /tmp/smoke-mie && cp data/sample/pec_sphere_rcs.ofd /tmp/smoke-mie/
+          cd /tmp/smoke-mie
+          "$GITHUB_WORKSPACE/bin/orcwa" -n 2 pec_sphere_rcs.ofd > run.log 2>&1
+          grep -q "normal end" orcwa.log
+          grep -q -- "--- converged ---" orcwa.log
+          python3 "$GITHUB_WORKSPACE/ci/check_mie.py" --radius 0.1 orcwa.log
+
       - name: Smoke test — RCWA (grating sample)
         run: |
           mkdir -p /tmp/smoke-rcwa && cp data/sample/grating.ofd /tmp/smoke-rcwa/
@@ -280,6 +293,7 @@ jobs:
           path: |
             /tmp/smoke/*.log
             /tmp/smoke-lossy/*.log
+            /tmp/smoke-mie/*.log
             /tmp/smoke-rcwa/*.log
             /tmp/smoke-orcwa/*.log
             /tmp/rcwa-unit/*.log
@@ -422,12 +436,29 @@ jobs:
           done
           exit $fail
 
+      # MPI 版の平面波入射。球の後方散乱は入射方向・偏波によらないので、
+      # 斜め入射 (θ=60°, φ=30°) + H 偏波でも同じ Mie 解と比較できる
+      # (r0 の x/y 成分と H 偏波の経路も通す)。n=3 は 50 セルの不均等分割。
+      - name: MPI plane wave (oblique, H-pol) — PEC sphere vs Mie
+        run: |
+          mkdir -p /tmp/mpi-mie
+          sed 's/^planewave = .*/planewave = 60 30 2/' \
+            "$GITHUB_WORKSPACE/data/sample/pec_sphere_rcs.ofd" > /tmp/mpi-mie/sphere.ofd
+          cd /tmp/mpi-mie
+          grep -q "^planewave = 60 30 2" sphere.ofd
+          timeout 600 mpirun --allow-run-as-root --oversubscribe \
+            -n 3 "$GITHUB_WORKSPACE/bin/orcwa_mpi" sphere.ofd > run.log 2>&1
+          grep -q -- "--- converged ---" orcwa.log
+          python3 "$GITHUB_WORKSPACE/ci/check_mie.py" --radius 0.1 orcwa.log
+
       - name: Upload logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: mpi-logs
-          path: /tmp/mpi-run/*.log
+          path: |
+            /tmp/mpi-run/*.log
+            /tmp/mpi-mie/*.log
           if-no-files-found: ignore
 
   # macOS (Apple Silicon)。AppleClang は OpenMP を同梱しないため、

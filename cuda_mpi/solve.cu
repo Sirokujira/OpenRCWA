@@ -413,42 +413,13 @@ void solve(int io, double *tdft, FILE *fp)
                 H5Dclose(dataset_id);
                 H5Sclose(dataspace_id);
 
-                /* Surface (per-step)。NSurface (近傍界サーフェス要素) と
-                   セル分割の対応が未確認のため並列化していない。
-                   H5Dcreate は集団操作なので全 rank が同じ次元 (g_NN) で呼び、
-                   書き込みだけを rank 0 に限定する (転送は既定 = INDEPENDENT
-                   なのでデッドロックしない)。MPI 版 (mpi/solve.c) と同じ扱い。
-                   TODO: SurfaceEx 等の分割を確認して並列化する。 */
-                hid_t complex_datatype = H5Tcreate(H5T_COMPOUND, sizeof(d_complex_t));
-                H5Tinsert(complex_datatype, "real", HOFFSET(d_complex_t, r), H5T_NATIVE_DOUBLE);
-                H5Tinsert(complex_datatype, "imag", HOFFSET(d_complex_t, i), H5T_NATIVE_DOUBLE);
-
-                hsize_t surf_dims[4] = {1, NFreq2, g_NN, 6};
-                dataspace_id = H5Screate_simple(4, surf_dims, NULL);
-                dataset_id = H5Dcreate(group_id, "Surface", complex_datatype, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-                {
-                    hsize_t surf_mem_dims[1] = {6};
-                    hid_t surf_mspace = H5Screate_simple(1, surf_mem_dims, NULL);
-                    for (int ifreq = 0; ifreq < NFreq2; ifreq++) {
-                        for (int surf = 0; (commRank == 0) && (surf < NSurface); surf++) {
-                            d_complex_t surf_value[6] = {
-                                SurfaceEx[ifreq][surf], SurfaceEy[ifreq][surf], SurfaceEz[ifreq][surf],
-                                SurfaceHx[ifreq][surf], SurfaceHy[ifreq][surf], SurfaceHz[ifreq][surf]
-                            };
-                            hsize_t surf_offset[4] = {0, (hsize_t)ifreq, (hsize_t)surf, 0};
-                            hsize_t surf_count[4] = {1, 1, 1, 6};
-                            H5Sselect_hyperslab(dataspace_id, H5S_SELECT_SET, surf_offset, NULL, surf_count, NULL);
-                            status = H5Dwrite(dataset_id, complex_datatype, surf_mspace, dataspace_id, H5P_DEFAULT, surf_value);
-                            if (status < 0) {
-                                fprintf(stderr, "Error writing Surface data at itime=%d, ifreq=%d, surf=%d\n", itime, ifreq, surf);
-                            }
-                        }
-                    }
-                    H5Sclose(surf_mspace);
-                }
-                H5Dclose(dataset_id);
-                H5Sclose(dataspace_id);
-                H5Tclose(complex_datatype);
+                /* 近傍界サーフェス (遠方界計算用) はここには出さない。
+                   NSurface / SurfaceEx 等は solve() 後の outputChars() で
+                   初めて設定されるため、以前ここで作っていた /dataNNNNNN/Surface は
+                   全ビルドで常に全要素 0 だった (しかも次元が NN)。並列 HDF5 では
+                   領域が先に確保されるので、ゼロのまま MPI 版のファイルの 4 割を
+                   占めていた。遠方界は orcwa.out (writeout) 経由で orcwa_post が
+                   計算する。 */
 
                 /* P: 直列版 (sol/solve.c) と同じ形 [1, NFreq2, g_NN, 3]。
                    GUI は同じファイルを読むので、ビルド構成でデータセットが
@@ -615,13 +586,11 @@ void solve(int io, double *tdft, FILE *fp)
 
     /* 集団 H5Dcreate は全 rank でデータ空間の次元が一致していなければ
        ならない。Niter は rank 0 でしか加算されず (average の後段)、
-       NSurface も rank ごとに異なりうるため、そのままだと Eiter/Hiter 等の
-       次元が食い違って集団呼び出しが噛み合わずハングする。
+       そのままだと Eiter/Hiter 等の次元が食い違って集団呼び出しが噛み合わずハングする。
        メタデータを書く前に rank 0 の値へ揃えておく。 */
 #ifdef _MPI
     if (commSize > 1) {
         MPI_Bcast(&Niter,    1, MPI_INT, 0, MPI_COMM_WORLD);
-        MPI_Bcast(&NSurface, 1, MPI_INT, 0, MPI_COMM_WORLD);
         MPI_Bcast(&Ntime,    1, MPI_INT, 0, MPI_COMM_WORLD);
 
         /* 給電点・観測点の波形は、そのセルを担当する rank にしか溜まらない。
@@ -826,43 +795,8 @@ void solve(int io, double *tdft, FILE *fp)
             H5Sclose(dataspace_id);
         }
         
-        // Surfaceデータの書き込み
-        dataspace_id = H5Screate(H5S_SCALAR);
-        dataset_id = H5Dcreate(metadata_group_id, "NSurface", H5T_NATIVE_INT, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-        
-        // データ書き込み (MPI対応)
-        if (commRank == 0) {   /* 書き込みは rank 0 のみ */
-            plist_id = H5Pcreate(H5P_DATASET_XFER);
-            H5Pset_dxpl_mpio(plist_id, H5FD_MPIO_INDEPENDENT);  // または H5FD_MPIO_INDEPENDENT
-            status = H5Dwrite(dataset_id, H5T_NATIVE_INT, H5S_ALL, H5S_ALL, plist_id, &NSurface);
-            H5Pclose(plist_id);
-        }
-        H5Dclose(dataset_id);
-        H5Sclose(dataspace_id);
-
-	    hid_t memtype = H5Tcreate(H5T_COMPOUND, sizeof(surface_t));
-	    H5Tinsert(memtype, "nx", HOFFSET(surface_t, nx), H5T_NATIVE_DOUBLE);
-	    H5Tinsert(memtype, "ny", HOFFSET(surface_t, ny), H5T_NATIVE_DOUBLE);
-	    H5Tinsert(memtype, "nz", HOFFSET(surface_t, nz), H5T_NATIVE_DOUBLE);
-	    H5Tinsert(memtype, "x", HOFFSET(surface_t, x), H5T_NATIVE_DOUBLE);
-	    H5Tinsert(memtype, "y", HOFFSET(surface_t, y), H5T_NATIVE_DOUBLE);
-	    H5Tinsert(memtype, "z", HOFFSET(surface_t, z), H5T_NATIVE_DOUBLE);
-	    H5Tinsert(memtype, "ds", HOFFSET(surface_t, ds), H5T_NATIVE_DOUBLE);
-
-        hsize_t surface_dims[1] = {NSurface};
-        dataspace_id = H5Screate_simple(1, surface_dims, NULL);
-        dataset_id = H5Dcreate(metadata_group_id, "Surface", memtype, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-
-        // データ書き込み (MPI対応)
-        if (commRank == 0) {   /* 書き込みは rank 0 のみ */
-            plist_id = H5Pcreate(H5P_DATASET_XFER);
-            H5Pset_dxpl_mpio(plist_id, H5FD_MPIO_INDEPENDENT);  // または H5FD_MPIO_INDEPENDENT
-            status = H5Dwrite(dataset_id, memtype, H5S_ALL, H5S_ALL, plist_id, Surface);
-            H5Pclose(plist_id);
-        }
-        H5Dclose(dataset_id);
-        H5Sclose(dataspace_id);
-	    H5Tclose(memtype);
+        /* metadata/NSurface・metadata/Surface は出さない (per-step の Surface と
+           同じ理由で、solve() の時点では NSurface = 0 の空データだった)。 */
 
         /* 屈折率マップ (metadata/Reflection)。セルごとの材料の sqrt(epsr)。
            CUDA 版だけが出していたので全ビルドで揃える。

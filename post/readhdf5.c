@@ -160,33 +160,9 @@ void readhdf5() {
     cHz_r = (float *)malloc(size);
     cHz_i = (float *)malloc(size);
 
-    // Surfaceデータの読み込み
-    dataset_id = H5Dopen(metadata_group_id, "NSurface", H5P_DEFAULT);
-    status = H5Dread(dataset_id, H5T_NATIVE_INT, H5S_ALL, H5S_ALL, H5P_DEFAULT, &NSurface);
-    H5Dclose(dataset_id);
-
-    // surface_t構造体に対応する複合データ型を再定義
-    hid_t memtype = H5Tcreate(H5T_COMPOUND, sizeof(surface_t));
-    H5Tinsert(memtype, "nx", HOFFSET(surface_t, nx), H5T_NATIVE_DOUBLE);
-    H5Tinsert(memtype, "ny", HOFFSET(surface_t, ny), H5T_NATIVE_DOUBLE);
-    H5Tinsert(memtype, "nz", HOFFSET(surface_t, nz), H5T_NATIVE_DOUBLE);
-    H5Tinsert(memtype, "x", HOFFSET(surface_t, x), H5T_NATIVE_DOUBLE);
-    H5Tinsert(memtype, "y", HOFFSET(surface_t, y), H5T_NATIVE_DOUBLE);
-    H5Tinsert(memtype, "z", HOFFSET(surface_t, z), H5T_NATIVE_DOUBLE);
-    H5Tinsert(memtype, "ds", HOFFSET(surface_t, ds), H5T_NATIVE_DOUBLE);
-
-	//surface_t
-    //Surface = (double *)malloc(sizeof(double) * NSurface);
-    if (Surface == NULL) {
-        Surface = (surface_t *)malloc(NSurface * sizeof(surface_t));
-    }
-    dataset_id = H5Dopen(metadata_group_id, "Surface", H5P_DEFAULT);
-    status = H5Dread(dataset_id, memtype, H5S_ALL, H5S_ALL, H5P_DEFAULT, Surface);
-    if (status < 0) {
-        fprintf(stderr, "Error reading dataset: Surface\n");
-    }
-    H5Dclose(dataset_id);
-    H5Tclose(memtype);
+    /* metadata/NSurface・metadata/Surface はソルバが出さなくなった
+       (solve() の時点では常に空だったため)。遠方界は orcwa.out (readout) を使う。 */
+    NSurface = 0;
 
     //size = NSurface * sizeof(surface_t);
     //Surface = (surface_t *)malloc(size);
