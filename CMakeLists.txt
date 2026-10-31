@@ -341,6 +341,7 @@ if (WITH_CUDA)
             ${CMAKE_SOURCE_DIR}/sol/farfield.c
             ${CMAKE_SOURCE_DIR}/sol/writeout.c
             ${CMAKE_SOURCE_DIR}/sol/powerloss.c
+            ${CMAKE_SOURCE_DIR}/sol/h5cells.c
             ${CMAKE_SOURCE_DIR}/sol/utils.c
             ${CMAKE_SOURCE_DIR}/sol/cputime.c
             ${CMAKE_SOURCE_DIR}/sol/plot3dGeom.c
