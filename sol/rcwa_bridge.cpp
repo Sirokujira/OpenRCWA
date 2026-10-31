@@ -17,6 +17,8 @@ rcwa_efficiency.csv に出力する。
   - scatterPlaneWave() の REF/TRN は入射波数 k0*sqrt(eps_ref) で
     正規化された次数別の効率 (合計が全反射率/全透過率)
   - 誘電率は複素数。時間規約 exp(-iwt) なので損失は「正」の虚部。
+  - rcwadispersion を指定した材料は周波数ごとに Lorentz 式で誘電率を求める
+    (rcwa/RCWADriver.cpp の epsAt と同じ式・同じ規約)。
 */
 
 #include "orcwa_rcwa.h"
@@ -67,14 +69,13 @@ std::vector<double> commonEdges(double period, bool useY)
 /* 1層 = 1 周期に eps1 の矩形 [0, fill*Λx] × [0, fill_y*Λy] が 1 つ、残りが eps2。
    fill_y = 1 なら y 方向に一様 (1D 線格子)。xe / ye は commonEdges() の境界。
    eps は (y セル行 × x セル列) */
-Layer makeLayer(const rcwalayer_t &l, const std::vector<double> &xe,
-                const std::vector<double> &ye)
+Layer makeLayer(const rcwalayer_t &l, scalex e1, scalex e2,
+                const std::vector<double> &xe, const std::vector<double> &ye)
 {
 	const double px = xe.back(), py = ye.back();
 	Eigen::VectorXs cx(xe.size()), cy(ye.size());
 	for (size_t i = 0; i < xe.size(); i++) cx[i] = xe[i];
 	for (size_t j = 0; j < ye.size(); j++) cy[j] = ye[j];
-	const scalex e1(l.eps1, l.eps1i), e2(l.eps2, l.eps2i);
 	Eigen::MatrixXcs eps(ye.size() - 1, xe.size() - 1);
 	for (int j = 0; j < eps.rows(); j++) {
 		const double yc = 0.5 * (ye[j] + ye[j + 1]);
@@ -87,10 +88,56 @@ Layer makeLayer(const rcwalayer_t &l, const std::vector<double> &xe,
 	return Layer(cx, cy, eps);
 }
 
-/* 層が無損失か (虚部がゼロか) */
-bool isLossless(const rcwalayer_t &l)
+/* (層 n, side) に有効な分散 (ae ≠ 0 の極) があるか */
+bool hasDispersion(int n, int side)
 {
-	return (l.eps1i == 0.0) && (l.eps2i == 0.0);
+	for (int p = 0; p < NRcwaPole; p++) {
+		const rcwapole_t &q = RcwaPole[p];
+		if ((q.layer == n) && (q.side == side) && (q.ae != 0.0)) return true;
+	}
+	return false;
+}
+
+/* 層 n の eps1 (side=1) / eps2 (side=2) の角周波数 omega [rad/s] での値。
+   分散が指定されていれば Lorentz 式 (rcwa/RCWADriver.cpp の epsAt と同じ):
+     eps = einf + Σ ae² / (ce² − ω² − i·be·ω)   (exp(-iωt) で be > 0 が損失)
+   einf は最後に書いた行の値、ae = 0 の行は極として数えない。 */
+scalex layerEps(int n, int side, double omega)
+{
+	const rcwalayer_t &l = RcwaLayer[n];
+	if (!hasDispersion(n, side)) {
+		return (side == 1) ? scalex(l.eps1, l.eps1i) : scalex(l.eps2, l.eps2i);
+	}
+	double einf = 0.0;
+	for (int p = 0; p < NRcwaPole; p++) {
+		const rcwapole_t &q = RcwaPole[p];
+		if ((q.layer == n) && (q.side == side)) einf = q.einf;
+	}
+	scalex e(einf, 0.0);
+	for (int p = 0; p < NRcwaPole; p++) {
+		const rcwapole_t &q = RcwaPole[p];
+		if ((q.layer != n) || (q.side != side) || (q.ae == 0.0)) continue;
+		e += scalex(q.ae * q.ae, 0.0) / scalex(q.ce * q.ce - omega * omega, -q.be * omega);
+	}
+	return e;
+}
+
+/* 層が無損失か。静的な値は虚部ゼロ、分散は全極 be = 0 (Drude の衝突なし等) */
+bool isLossless(int n)
+{
+	for (int side = 1; side <= 2; side++) {
+		if (hasDispersion(n, side)) {
+			for (int p = 0; p < NRcwaPole; p++) {
+				const rcwapole_t &q = RcwaPole[p];
+				if ((q.layer == n) && (q.side == side) && (q.ae != 0.0) && (q.be != 0.0))
+					return false;
+			}
+		} else {
+			const double im = (side == 1) ? RcwaLayer[n].eps1i : RcwaLayer[n].eps2i;
+			if (im != 0.0) return false;
+		}
+	}
+	return true;
 }
 
 } // namespace
@@ -119,8 +166,14 @@ extern "C" int rcwa_run(FILE *fp_log)
 
 	/* 損失層があると R+T<1 が正常なので、エネルギー保存の警告を切り替える */
 	bool lossless = true;
+	int ndisp = 0;
 	for (int n = 0; n < NRcwaLayer; n++) {
-		if (!isLossless(RcwaLayer[n])) lossless = false;
+		if (!isLossless(n)) lossless = false;
+		ndisp += hasDispersion(n, 1) + hasDispersion(n, 2);
+	}
+	if (ndisp > 0) {
+		sprintf(str, "RCWA : dispersive (Lorentz) materials : %d (layer, eps1/eps2) pairs", ndisp);
+		monitor1(fp_log, str);
 	}
 
 	const double thetaRad = RcwaTheta * M_PI / 180.0;
@@ -142,10 +195,6 @@ extern "C" int rcwa_run(FILE *fp_log)
 		teY =  std::cos(phiRad);
 	}
 
-	/* 入射側半無限層の屈折率 (Bloch 波数に使う)。両端は均質前提なので eps1 を見る。
-	   複素平方根の実部を取ることで eps<1 (プラズマ等) にも対応する。 */
-	const scalex eps_inc = scalex(RcwaLayer[0].eps1, RcwaLayer[0].eps1i);
-	const double n_inc = std::max(std::sqrt(eps_inc).real(), 1e-6);
 
 	const std::vector<double> xedges = commonEdges(RcwaPeriod, false);
 	const std::vector<double> yedges = commonEdges(RcwaPeriodY, true);
@@ -182,12 +231,31 @@ extern "C" int rcwa_run(FILE *fp_log)
 		}
 		const double lambda = C0 / freq;
 		const double k0 = 2.0 * M_PI / lambda;
+		const double omega = 2.0 * M_PI * freq;
+
+		/* 入射側半無限層の屈折率 (Bloch 波数に使う)。両端は均質前提なので eps1 を見る。
+		   複素平方根の実部を取ることで eps<1 (プラズマ等) にも対応する。
+		   分散があると周波数ごとに変わるので、ここで求める。 */
+		const scalex eps_inc = layerEps(0, 1, omega);
+		const double n_inc = std::max(std::sqrt(eps_inc).real(), 1e-6);
+		if (ndisp > 0) {
+			static bool warned = false;
+			const scalex eps_trn = layerEps(NRcwaLayer - 1, 1, omega);
+			if (!warned && ((eps_inc.imag() > 1e-6 * std::fabs(eps_inc.real())) ||
+			                (eps_trn.imag() > 1e-6 * std::fabs(eps_trn.real())))) {
+				sprintf(str, "*** warning : a semi-infinite layer is lossy at f=%.4e[Hz];"
+					" R/T normalization assumes lossless outer media", freq);
+				monitor1(fp_log, str);
+				warned = true;
+			}
+		}
 
 		/* 層の固有値問題は波長依存のため周波数毎に解き直す */
 		RCWASolver solver(NRcwaHarmonics, NRcwaHarmonicsY);
 		solver.disablePML();
 		for (int n = 0; n < NRcwaLayer; n++) {
-			solver.addLayer(makeLayer(RcwaLayer[n], xedges, yedges));
+			solver.addLayer(makeLayer(RcwaLayer[n], layerEps(n, 1, omega),
+			                          layerEps(n, 2, omega), xedges, yedges));
 		}
 		/* 斜め入射の Bloch 波数。solve() より前に設定する必要がある */
 		solver.setBlochWavevector(k0 * n_inc * std::sin(thetaRad) * std::cos(phiRad),

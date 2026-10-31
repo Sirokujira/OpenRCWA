@@ -84,6 +84,7 @@ CI (Linux ジョブ) が全件を実行し、エネルギー保存と解析解�
 | `rcwa_oblique.ofd` | `orcwa` | 斜め入射 (ブリュースター角)。R_TM≈0, R_TE=0.147929 |
 | `rcwa_metal.ofd` | `orcwa` | 複素誘電率の金属薄膜。R=0.909420, T=0.084430, A>0 |
 | `rcwa_rect2d.ofd` | `orcwa` | 2D 格子 (正方格子の正方形柱)。法線入射で TE = TM、R+T=1 |
+| `rcwa_drude_film.ofd` | `orcwa` | 分散材料 (`rcwadispersion`) の Drude 金属薄膜。R+T<1, A>0。`rcwa_metal_drude.orcwa` と同じ構造 |
 | `grating.ofd` | `orcwa` | 周期格子の波長掃引。全点で R+T=1 |
 | `dipole.ofd` | `orcwa` | FDTD (RCWA ではない)。無損失 (PEC+空気) なので **P_loss は全セル厳密に 0** |
 | `lossy_block.ofd` | `orcwa` | FDTD。電気損失材と磁気損失材のブロック。P_loss がその場所にだけ立つ |
@@ -323,9 +324,14 @@ planewave = <theta[deg]> <phi[deg]> <pol>
   `planewave` 自体を省略すると法線入射。θ は (−90, 90)。
 - 偏波基底と Bloch 波数の決め方は `rcwa/RCWADriver.cpp` と**同一にすること**。
   正規化 (1/kzinc) と対で決まっており、片方だけ変えると斜め入射で R+T≠1 になる。
-- **`.ofd` 経路は分散 (波長依存) を扱えない**。`rcwalayer` の誘電率は固定値
-  なので、金属など分散の効く材料は設計波長近傍でしか意味を持たない。
-  波長依存が必要なら `.orcwa` の `material_dispersion` + `orcwa_rcwa` を使う。
+- **分散材料**: `rcwadispersion = <layer(1..)> <side(1|2)> <einf> <ae> <be> <ce>`
+  [rad/s] で層の eps1 (side=1) / eps2 (side=2) に Lorentz 極を与える
+  (`eps = einf + Σ ae²/(ce²−ω²−i·be·ω)`)。意味付けは `.orcwa` の
+  `material_dispersion` と同じ: 同じ (layer, side) の複数行は極の**加算**、
+  einf は最後の行、ae≠0 の極が 1 つでもあれば `rcwalayer` の静的な値は使わない。
+  be>0 が損失、be<0 (利得) は入力エラー。一様層は eps1 / eps2 の両方に書く。
+  Drude 金属は `ce=0, ae=ωp, be=γ`。検証は `ci/check_rcwa_ofd_dispersion.py`
+  (Drude 薄膜を特性行列法と比べて 5e-10、`rcwa_metal_drude.orcwa` と 4e-9)。
 - **`.ofd` 経路の層形状は「矩形 1 つ」まで**。円柱など任意形状の 2D 格子は
   `.orcwa` 経路 (`geometry`) が必要。
 

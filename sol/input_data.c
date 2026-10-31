@@ -17,6 +17,8 @@ int          NRcwaHarmonicsY = 0;
 double       RcwaPeriodY = 0;
 int          NRcwaLayer = 0;
 rcwalayer_t  *RcwaLayer = NULL;
+int          NRcwaPole = 0;
+rcwapole_t   *RcwaPole = NULL;
 double       RcwaTheta = 0;
 double       RcwaPhi = 0;
 
@@ -479,6 +481,21 @@ int input_data(FILE *fp)
 				return 1;
 			}
 		}
+		else if (!strcmp(strkey, "rcwadispersion")) {
+			/* rcwadispersion = <layer(1..)> <side(1|2)> <einf> <ae> <be> <ce> */
+			if (ntoken != 8) {
+				printf(errfmt3, strkey, NRcwaPole + 1);
+				return 1;
+			}
+			RcwaPole = (rcwapole_t *)realloc(RcwaPole, (NRcwaPole + 1) * sizeof(rcwapole_t));
+			RcwaPole[NRcwaPole].layer = atoi(token[2]) - 1;
+			RcwaPole[NRcwaPole].side  = atoi(token[3]);
+			RcwaPole[NRcwaPole].einf  = atof(token[4]);
+			RcwaPole[NRcwaPole].ae    = atof(token[5]);
+			RcwaPole[NRcwaPole].be    = atof(token[6]);
+			RcwaPole[NRcwaPole].ce    = atof(token[7]);
+			NRcwaPole++;
+		}
 		else if (!strcmp(strkey, "rcwalayer")) {
 			if (ntoken > 5) {
 				RcwaLayer = (rcwalayer_t *)realloc(RcwaLayer,
@@ -528,6 +545,10 @@ int input_data(FILE *fp)
 */
 	// RCWA モード: 層スタックの検証のみ行い、FDTD 用のメッシュ/給電の
 	// チェックとセットアップはスキップする (sol_Main.c が rcwa_run() へ分岐)
+	if ((NRcwaPole > 0) && (NRcwaLayer == 0)) {
+		printf("%s\n", "*** rcwadispersion needs rcwalayer data");
+		return 1;
+	}
 	if (NRcwaLayer > 0) {
 		if (NRcwaLayer < 2) {
 			printf("%s\n", "*** rcwa needs at least 2 rcwalayer (incident/exit)");
@@ -592,6 +613,21 @@ int input_data(FILE *fp)
 			}
 			if ((n > 0) && (n < NRcwaLayer - 1) && (RcwaLayer[n].thickness <= 0)) {
 				printf("*** invalid rcwalayer thickness #%d\n", n + 1);
+				return 1;
+			}
+		}
+		for (int p = 0; p < NRcwaPole; p++) {
+			const rcwapole_t *q = &RcwaPole[p];
+			if ((q->layer < 0) || (q->layer >= NRcwaLayer) ||
+			    ((q->side != 1) && (q->side != 2)) || (q->ce < 0)) {
+				printf("*** invalid rcwadispersion data #%d"
+				       " (layer 1..%d, side 1|2, ce >= 0)\n", p + 1, NRcwaLayer);
+				return 1;
+			}
+			/* exp(-iwt) では be > 0 が損失。負は利得になり R+T>1 が出る */
+			if (q->be < 0) {
+				printf("*** rcwadispersion #%d has negative be"
+				       " (gain medium; loss must be positive for exp(-iwt))\n", p + 1);
 				return 1;
 			}
 		}

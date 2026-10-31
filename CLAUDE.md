@@ -73,8 +73,9 @@ $OLDPWD/bin/orcwa -n 2 grating.ofd && cat rcwa_efficiency.csv
   よい (ブリッジが全層共通のセル格子を作る。以前は fill 混在で落ちていた)。
   **厚みは物理長** (γ = k0·neff スケーリング前提)。誘電率の虚部は省略可
   (正 = 損失、実部が負の金属も可)。`planewave` の pol は無視され、TE/TM 両方を
-  常に出力する。`.ofd` 経路は分散なし・層形状は矩形 1 つまで (分散や円柱など
-  任意形状は `.orcwa` + `orcwa_rcwa`)。2D の検証は `ci/check_rcwa_ofd2d.py`。
+  常に出力する。分散材料は `rcwadispersion = <layer> <side(1|2)> <einf> <ae> <be> <ce>`
+  (`.orcwa` の `material_dispersion` と同じ式・意味付け)。`.ofd` 経路の層形状は
+  矩形 1 つまで (円柱など任意形状は `.orcwa` + `orcwa_rcwa`)。2D / 分散の検証は `ci/check_rcwa_ofd2d.py` / `ci/check_rcwa_ofd_dispersion.py`。
 - 固有値ソルバーは `rcwa/MKLEigenSolver.hpp` の 3 分岐
   (MKL / LAPACKE / Eigen フォールバック)。**±m 次数の縮退固有値**で
   固有ベクトル基底が不良条件になり回折効率が発散する事象があるため、

@@ -34,6 +34,26 @@ typedef struct {
 	double thickness;  /* 層厚 [m] (先頭/末尾の半無限層では無視) */
 } rcwalayer_t;
 
+/* 層の材料 (eps1 / eps2) の分散。rcwadispersion キー 1 行 = 1 極。
+     eps(ω) = einf + Σ_p ae_p² / (ce_p² − ω² − i·be_p·ω)   [ω, ae, be, ce: rad/s]
+   .orcwa の material_dispersion と同じ意味付け:
+     - 同じ (layer, side) に複数行書くと極が加算される
+     - einf は最後に書いた行の値
+     - ae ≠ 0 の極が 1 つでもあれば、rcwalayer の静的な誘電率の代わりに
+       この式を使う (静的な値は無視される)
+   be > 0 が損失 (exp(-iωt) で正の虚部)。be < 0 は利得なので入力エラー。 */
+typedef struct {
+	int    layer;      /* 層番号 (0 始まり。入力は 1 始まり) */
+	int    side;       /* 1 = eps1, 2 = eps2 */
+	double einf;
+	double ae;
+	double be;
+	double ce;
+} rcwapole_t;
+
+extern int          NRcwaPole;
+extern rcwapole_t   *RcwaPole;
+
 extern int          NRcwaHarmonics;  /* x 方向の空間高調波次数 Nx (計算次数は 2Nx+1) */
 extern double       RcwaPeriod;      /* x 方向の格子周期 Λx [m] */
 /* y 方向。rcwa = Nx Λx Ny Λy と書いたときだけ 2D 格子になる。

@@ -155,12 +155,16 @@ jobs:
           print(f"RCWA Fresnel OK: R={R:.5f}, T={T:.5f}, A={A:.5f}, R+T={RT:.5f}")
           PY
 
-      # .ofd の 2D 格子 (rcwa = Nx Λx Ny Λy / fill_y)。1D との一致・C4 対称・
-      # 90° 回転・.orcwa 経路との一致と、fill の違う層の混在 (以前は落ちていた)。
-      - name: RCWA 2D gratings (.ofd path)
+      # .ofd の RCWA 拡張。2D 格子 (rcwa = Nx Λx Ny Λy / fill_y): 1D との一致・
+      # C4 対称・90° 回転・.orcwa 経路との一致・fill の違う層の混在 (以前は落ちていた)。
+      # 分散 (rcwadispersion): Drude 薄膜の解析解・.orcwa 経路との一致・極の加算。
+      - name: RCWA .ofd extensions (2D gratings, dispersion)
         run: |
           python3 ci/check_rcwa_ofd2d.py --orcwa "$GITHUB_WORKSPACE/bin/orcwa" \
             --orcwa-rcwa "$GITHUB_WORKSPACE/bin/orcwa_rcwa"
+          python3 ci/check_rcwa_ofd_dispersion.py --orcwa "$GITHUB_WORKSPACE/bin/orcwa" \
+            --orcwa-rcwa "$GITHUB_WORKSPACE/bin/orcwa_rcwa" \
+            --sample "$GITHUB_WORKSPACE/data/sample/rcwa_metal_drude.orcwa"
 
       # data/sample/ の RCWA サンプルを一通り実行する。解析解が分かっている
       # ものは値そのものを、それ以外は吸収込みのエネルギー保存 R+T+A=1 を
@@ -222,6 +226,15 @@ jobs:
               if (($3-$5)^2 > 1e-12 || ($4-$6)^2 > 1e-12) { print "2D square: TE != TM:", $0; exit 1 }
               if ((($3+$4)-1)^2 > 1e-12 || (($5+$6)-1)^2 > 1e-12) { print "2D square: R+T != 1:", $0; exit 1 } }' rcwa_efficiency.csv
           echo "  rcwa_rect2d OK"
+          # --- .ofd の分散材料: Drude 金属薄膜。損失があるので R+T<1, A>0 ---
+          cp "$GITHUB_WORKSPACE/data/sample/rcwa_drude_film.ofd" .
+          "$GITHUB_WORKSPACE/bin/orcwa" -n 2 rcwa_drude_film.ofd > drude.log 2>&1
+          grep -q "normal end" drude.log
+          grep -q "dispersive (Lorentz) materials : 2" orcwa.log
+          awk -F, 'NR>1 {
+              if ($3+$4 >= 1 || $5+$6 >= 1) { print "Drude film: R+T>=1:", $0; exit 1 }
+              if ($3+$4 < 0.9) { print "Drude film: R+T too small:", $0; exit 1 } }' rcwa_efficiency.csv
+          echo "  rcwa_drude_film OK"
           # --- .ofd の斜め入射: ブリュースター角で R_TM=0, R_TE=0.147929 ---
           cp "$GITHUB_WORKSPACE/data/sample/rcwa_oblique.ofd" .
           "$GITHUB_WORKSPACE/bin/orcwa" -n 2 rcwa_oblique.ofd > obl.log 2>&1
@@ -567,12 +580,16 @@ jobs:
           print(f"RCWA Fresnel OK: R={R:.5f}, T={T:.5f}, A={A:.5f}, R+T={RT:.5f}")
           PY
 
-      # .ofd の 2D 格子 (rcwa = Nx Λx Ny Λy / fill_y)。1D との一致・C4 対称・
-      # 90° 回転・.orcwa 経路との一致と、fill の違う層の混在 (以前は落ちていた)。
-      - name: RCWA 2D gratings (.ofd path)
+      # .ofd の RCWA 拡張。2D 格子 (rcwa = Nx Λx Ny Λy / fill_y): 1D との一致・
+      # C4 対称・90° 回転・.orcwa 経路との一致・fill の違う層の混在 (以前は落ちていた)。
+      # 分散 (rcwadispersion): Drude 薄膜の解析解・.orcwa 経路との一致・極の加算。
+      - name: RCWA .ofd extensions (2D gratings, dispersion)
         run: |
           python3 ci/check_rcwa_ofd2d.py --orcwa "$GITHUB_WORKSPACE/bin/orcwa" \
             --orcwa-rcwa "$GITHUB_WORKSPACE/bin/orcwa_rcwa"
+          python3 ci/check_rcwa_ofd_dispersion.py --orcwa "$GITHUB_WORKSPACE/bin/orcwa" \
+            --orcwa-rcwa "$GITHUB_WORKSPACE/bin/orcwa_rcwa" \
+            --sample "$GITHUB_WORKSPACE/data/sample/rcwa_metal_drude.orcwa"
 
       - name: Upload binaries (artifact)
         uses: actions/upload-artifact@v4
@@ -731,12 +748,17 @@ jobs:
           if ([math]::Abs($A) -gt 1e-3) { Write-Error "A=$A expected ~0 (lossless)"; exit 1 }
           Write-Host "RCWA Fresnel OK: R=$R, T=$T, A=$A, R+T=$RT"
 
-      # .ofd の 2D 格子。Windows は Eigen フォールバック経路 (対角摂動あり) なので
-      # 厳密な対称性の破れが LAPACKE 経路より大きい (許容差はスクリプト側で設定)。
-      - name: RCWA 2D gratings (.ofd path)
+      # .ofd の RCWA 拡張 (2D 格子・分散)。Windows は Eigen フォールバック経路
+      # (対角摂動あり) なので、厳密な対称性の破れが LAPACKE 経路より大きい
+      # (許容差はスクリプト側で設定)。
+      - name: RCWA .ofd extensions (2D gratings, dispersion)
         run: |
           python ci/check_rcwa_ofd2d.py --orcwa "$env:GITHUB_WORKSPACE\bin\orcwa.exe" `
             --orcwa-rcwa "$env:GITHUB_WORKSPACE\bin\orcwa_rcwa.exe"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          python ci/check_rcwa_ofd_dispersion.py --orcwa "$env:GITHUB_WORKSPACE\bin\orcwa.exe" `
+            --orcwa-rcwa "$env:GITHUB_WORKSPACE\bin\orcwa_rcwa.exe" `
+            --sample "$env:GITHUB_WORKSPACE\data\sample\rcwa_metal_drude.orcwa"
           if ($LASTEXITCODE -ne 0) { exit 1 }
 
       - name: Upload binaries (artifact)
