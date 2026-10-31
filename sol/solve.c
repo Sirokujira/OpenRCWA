@@ -339,7 +339,7 @@ void solve(int io, double *tdft, FILE *fp) {
         {"VPoint", VPoint, NPoint * (Solver.maxiter + 1)},
         {"Freq1", Freq1, NFreq1},
         {"Freq2", Freq2, NFreq2},
-        {"Gline", Gline, NGline * 2 * 3}
+        {"Gline", (double *)Gline, NGline * 2 * 3}
     };
 
     for (int i = 0; i < sizeof(arrays) / sizeof(arrays[0]); i++) {
