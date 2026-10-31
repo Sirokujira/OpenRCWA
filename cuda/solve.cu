@@ -7,6 +7,7 @@ solve.cu (CUDA)
 #include "orcwa_prototype.h"
 
 #include "hdf5.h"
+#include "h5cells.h"
 #define FILE_NAME "time_series_data.h5"
 
 static void copy_to_host();
@@ -47,6 +48,13 @@ void solve(int io, double *tdft, FILE *fp)
         exit(1);
     }
     memset(P_losses, 0, (size_t)NFreq2 * NN * sizeof(double));
+
+    /* HDF5 出力用の作業バッファ (1 周波数ぶん、E/H の 6 成分。P / P_loss も使い回す) */
+    double *cellbuf = (double *)malloc((size_t)NN * 6 * sizeof(double));
+    if (cellbuf == NULL) {
+        fprintf(stderr, "*** HDF5 output buffer malloc error (NFreq2=%d NN=%zu)\n", NFreq2, (size_t)NN);
+        exit(1);
+    }
 
     int itime;
     double t = 0;
@@ -171,181 +179,9 @@ void solve(int io, double *tdft, FILE *fp)
                 //sprintf(str, "group_name : %s", group_name);
                 //fprintf(stdout, "%s\n", str);
 
-                // Eフィールドデータセットの作成と書き込み
-                hsize_t e_dims[4] = {1, NFreq2, NN, 6};
-                //hsize_t e_dims[4] = {1, NFreq2, Nx*Ny*Nz, 6};
-                dataspace_id = H5Screate_simple(4, e_dims, NULL);
-                dataset_id = H5Dcreate(group_id, "E", H5T_NATIVE_DOUBLE, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-
-                // 書き込み用のメモリスペースを修正
-                hsize_t mem_dims[1] = {6};
-                memspace_id = H5Screate_simple(1, mem_dims, NULL);
-
-                //sprintf(str, "NFreq2 : %d", NFreq2);
-                //fprintf(stdout, "%s\n", str);
-
-                for (int ifreq = 0; ifreq < NFreq2; ifreq++) {
-                    int64_t n0 = ifreq * NN;
-                    for (int nn = 0; nn < NN; nn++) {
-                        //fprintf(stdout, "set e_value.\n");
-
-                        double e_value[6] = {
-                            cEx_r[n0 + nn], cEy_r[n0 + nn], cEz_r[n0 + nn],
-                            cEx_i[n0 + nn], cEy_i[n0 + nn], cEz_i[n0 + nn]
-                        };
-
-                        hsize_t e_offset[4] = {0, ifreq, nn, 0};
-                        hsize_t e_count[4] = {1, 1, 1, 6};
-                        //fprintf(stdout, "H5Sselect_hyperslab.\n");
-                        H5Sselect_hyperslab(dataspace_id, H5S_SELECT_SET, e_offset, NULL, e_count, NULL);
-
-                        // 書き込み
-                        //fprintf(stdout, "H5Dwrite.\n");
-                        status = H5Dwrite(dataset_id, H5T_NATIVE_DOUBLE, memspace_id, dataspace_id, H5P_DEFAULT, e_value);
-                        if (status < 0) {
-                            fprintf(stderr, "Error writing E data at itime=%d, ifreq=%d, nn=%d\n", itime, ifreq, nn);
-                        }
-                    }
-
-                    /*
-                    //Nx
-                    int datacount = 0;
-                    //for (int x = iMin + lx; x <= iMax - lx; x++)
-                    for (int x = iMin; x < iMax; x++)
-                    {
-                        //Ny
-                        //for (int y = jMin - ly; y <= jMax + ly; y++)
-                        for (int y = jMin; y < jMax; y++)
-                        {
-                            //Ny
-                            //for (int z = kMin + lz; z <= kMax - lz; z++)
-                            for (int z = kMin; z < kMax; z++)
-                            {
-                                //境界線の対応は間引く
-                                int nn = NA(x, y, z);
-                                //printf("%d.\", nn)
-                                //sprintf(str, "%7d", nn);
-                                //fprintf(stdout, "%s\n", str);
-                                double e_value[6] = {
-                                    cEx_r[n0 + nn], cEy_r[n0 + nn], cEz_r[n0 + nn],
-                                    cEx_i[n0 + nn], cEy_i[n0 + nn], cEz_i[n0 + nn]
-                                };
-
-                                hsize_t e_offset[4] = {0, ifreq, datacount, 0};
-                                hsize_t e_count[4] = {1, 1, 1, 6};
-                                //fprintf(stdout, "H5Sselect_hyperslab.\n");
-                                H5Sselect_hyperslab(dataspace_id, H5S_SELECT_SET, e_offset, NULL, e_count, NULL);
-
-                                // 書き込み
-                                //fprintf(stdout, "H5Dwrite.\n");
-                                status = H5Dwrite(dataset_id, H5T_NATIVE_DOUBLE, memspace_id, dataspace_id, H5P_DEFAULT, e_value);
-                                if (status < 0) {
-                                    fprintf(stderr, "Error writing E data at itime=%d, ifreq=%d, nn=%d\n", itime, ifreq, nn);
-                                }
-                                datacount++;
-                            }
-                        }
-                    }
-                    */
-                }
-                H5Dclose(dataset_id);
-                H5Sclose(dataspace_id);
-
-                // Hフィールドデータセットの作成と書き込み
-                hsize_t h_dims[4] = {1, NFreq2, NN, 6};
-                dataspace_id = H5Screate_simple(4, h_dims, NULL);
-                dataset_id = H5Dcreate(group_id, "H", H5T_NATIVE_DOUBLE, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-
-                for (int ifreq = 0; ifreq < NFreq2; ifreq++) {
-                    int64_t n0 = ifreq * NN;
-                    for (int nn = 0; nn < NN; nn++) {
-                        double h_value[6] = {
-                            cHx_r[n0 + nn], cHy_r[n0 + nn], cHz_r[n0 + nn],
-                            cHx_i[n0 + nn], cHy_i[n0 + nn], cHz_i[n0 + nn]
-                        };
-
-                        hsize_t h_offset[4] = {0, ifreq, nn, 0};
-                        hsize_t h_count[4] = {1, 1, 1, 6};
-                        H5Sselect_hyperslab(dataspace_id, H5S_SELECT_SET, h_offset, NULL, h_count, NULL);
-                        status = H5Dwrite(dataset_id, H5T_NATIVE_DOUBLE, memspace_id, dataspace_id, H5P_DEFAULT, h_value);
-                        if (status < 0) {
-                            fprintf(stderr, "Error writing H data at itime=%d, ifreq=%d, nn=%d\n", itime, ifreq, nn);
-                        }
-                    }
-                }
-                H5Dclose(dataset_id);
-                H5Sclose(dataspace_id);
-
-                /* 近傍界サーフェス (遠方界計算用) はここには出さない。
-                   NSurface / SurfaceEx 等は solve() 後の outputChars() で
-                   初めて設定されるため、以前ここで作っていた /dataNNNNNN/Surface は
-                   全ビルドで常に全要素 0 だった (しかも次元が NN)。並列 HDF5 では
-                   領域が先に確保されるので、ゼロのまま MPI 版のファイルの 4 割を
-                   占めていた。遠方界は orcwa.out (writeout) 経由で orcwa_post が
-                   計算する。 */
-
-                // Pフィールドデータセットの作成と書き込み（仮の例）
-                hsize_t p_dims[4] = {1, NFreq2, NN, 3};
-                dataspace_id = H5Screate_simple(4, p_dims, NULL);
-                dataset_id = H5Dcreate(group_id, "P", H5T_NATIVE_DOUBLE, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-
-                // 書き込み用のメモリスペースを修正
-                hsize_t mem_dims2[1] = {3};
-                memspace_id = H5Screate_simple(1, mem_dims2, NULL);
-
-                for (int ifreq = 0; ifreq < NFreq2; ifreq++) {
-                    int64_t n0 = ifreq * NN;
-                    for (int nn = 0; nn < NN; nn++) {
-                        /* 直列版 (sol/solve.c) と同じ Poynting ベクトル。
-                           2 箇所で cHz_r が cEz_r と打ち間違えられており、
-                           CUDA ビルドだけ P の 2 成分が別物になっていた。
-                           格納順は直列版の慣習に合わせる (Ex*Hy-Ey*Hx,
-                           Ey*Hz-Ez*Hy, Ez*Hx-Ex*Hz)。 */
-                        double p_value[3] = {
-                            cEx_r[n0 + nn] * cHy_r[n0 + nn] - cEy_r[n0 + nn] * cHx_r[n0 + nn],
-                            cEy_r[n0 + nn] * cHz_r[n0 + nn] - cEz_r[n0 + nn] * cHy_r[n0 + nn],
-                            cEz_r[n0 + nn] * cHx_r[n0 + nn] - cEx_r[n0 + nn] * cHz_r[n0 + nn]
-                        };
-
-                        hsize_t p_offset[4] = {0, ifreq, nn, 0};
-                        hsize_t p_count[4] = {1, 1, 1, 3};
-                        H5Sselect_hyperslab(dataspace_id, H5S_SELECT_SET, p_offset, NULL, p_count, NULL);
-                        status = H5Dwrite(dataset_id, H5T_NATIVE_DOUBLE, memspace_id, dataspace_id, H5P_DEFAULT, p_value);
-                        if (status < 0) {
-                            fprintf(stderr, "Error writing P data at itime=%d, ifreq=%d, nn=%d\n", itime, ifreq, nn);
-                        }
-                    }
-                }
-                H5Dclose(dataset_id);
-                H5Sclose(dataspace_id);
-
-                /* 発熱量密度 P_loss。直列版 (sol/solve.c) と同じ形
-                   [1, NFreq2, NN, 1] で出す。GUI は同じファイルを読むので、
-                   ビルド構成でデータセットが欠けると機能が黙って落ちる。 */
-                hsize_t pl_dims[4] = {1, NFreq2, NN, 1};
-                dataspace_id = H5Screate_simple(4, pl_dims, NULL);
-                dataset_id = H5Dcreate(group_id, "P_loss", H5T_NATIVE_DOUBLE, dataspace_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-
-                hsize_t mem_dims3[1] = {1};
-                H5Sclose(memspace_id);
-                memspace_id = H5Screate_simple(1, mem_dims3, NULL);
-
-                for (int ifreq = 0; ifreq < NFreq2; ifreq++) {
-                    int64_t n0 = ifreq * NN;
-                    for (int nn = 0; nn < NN; nn++) {
-                        double pl_value[1] = { P_losses[n0 + nn] };
-
-                        hsize_t pl_offset[4] = {0, (hsize_t)ifreq, (hsize_t)nn, 0};
-                        hsize_t pl_count[4] = {1, 1, 1, 1};
-                        H5Sselect_hyperslab(dataspace_id, H5S_SELECT_SET, pl_offset, NULL, pl_count, NULL);
-                        status = H5Dwrite(dataset_id, H5T_NATIVE_DOUBLE, memspace_id, dataspace_id, H5P_DEFAULT, pl_value);
-                        if (status < 0) {
-                            fprintf(stderr, "Error writing P_loss data at itime=%d, ifreq=%d, nn=%d\n", itime, ifreq, nn);
-                        }
-                    }
-                }
-                H5Dclose(dataset_id);
-                H5Sclose(dataspace_id);
+                // E/H/P/P_loss (sol/h5cells.c。直列版と共通。値は memcopy3_gpu() で
+                // ホストへ戻した DFT 配列から作る)
+                write_cell_fields_hdf5(group_id, P_losses, cellbuf, itime);
 
                 // グループのクローズ
                 H5Gclose(group_id);
@@ -362,11 +198,9 @@ void solve(int io, double *tdft, FILE *fp)
         }
     }
 
-    // メモリスペース、データセットとデータスペースのクローズ
-    status = H5Sclose(memspace_id);
-
     // メモリの解放
     free(P_losses);
+    free(cellbuf);
 
     // result
     if (io) {

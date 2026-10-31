@@ -747,7 +747,7 @@ void solve(int io, double *tdft, FILE *fp)
             {"VPoint", VPoint, NPoint * (Solver.maxiter + 1)},
             {"Freq1", Freq1, NFreq1},
             {"Freq2", Freq2, NFreq2},
-            {"Gline", Gline, NGline * 2 * 3}
+            {"Gline", (double *)Gline, NGline * 2 * 3}
         };
 
         /* 集団操作である H5Dcreate は全 rank で次元が一致していなければ

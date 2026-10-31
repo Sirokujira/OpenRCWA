@@ -179,6 +179,14 @@ GUI は `time_series_data.h5` を読むので、**ビルド構成でデータセ
 `Reflection` はセルごとの屈折率 `sqrt(Material[iEx[nn]].epsr)` を `[NN, 1]` で
 出したもの。以前は CUDA 版だけが持っていた。
 
+`/data%06d` の E/H/P/P_loss の書き出しは、直列版と CUDA 版 (どちらもホストに
+全領域の配列がある) で `sol/h5cells.c` の `write_cell_fields_hdf5()` を共有する。
+**周波数ごとに 1 回の `H5Dwrite`** で書くこと。以前は 1 セルずつハイパースラブを
+選んで書いており (出力 1 回あたり NFreq2 × NN × 4 回)、`pec_sphere_rcs.ofd`
+では計算時間の 85% を占めていた (直列 96 秒 → 15 秒)。作業バッファは 1 周波数
+ぶん (NN × 6 個の double) に留め、全周波数を一度に詰めない (大規模問題で
+DFT 配列と同程度のメモリを余計に食うため)。MPI 版は rank ごとの集団書き込みで別実装。
+
 **遠方界用の近傍界サーフェス (`Surface`) は HDF5 に出さない**。以前は
 `/data%06d/Surface` と `/metadata/NSurface`・`/metadata/Surface` を書いていたが、
 `NSurface` と `SurfaceEx` 等は `solve()` の**後**の `outputChars()`
