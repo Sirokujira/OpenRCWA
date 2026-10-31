@@ -1,7 +1,7 @@
 /*
 rcwa_bridge.cpp
 
-.ofd の rcwa/rcwalayer キーで指定された 1D 格子スタックを
+.ofd の rcwa/rcwalayer キーで指定された格子スタック (1D または 2D) を
 RCWA コア (rcwa/RCWASolver) で解き、frequency1 掃引の回折効率を
 rcwa_efficiency.csv に出力する。
 
@@ -25,6 +25,7 @@ rcwa_efficiency.csv に出力する。
 #include "rcwa/RCWASolver.h"
 #include "rcwa/Layer.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <vector>
@@ -40,15 +41,49 @@ namespace {
 
 const double C0 = 2.99792458e8;  /* 真空中の光速 [m/s] */
 
-/* 1層 = x 方向 2 セル (eps1: 0..fill*P, eps2: fill*P..P)、y 方向一様 */
-Layer makeLayer(const rcwalayer_t &l, double period)
+/* 全層で共通のセル境界 [0, ..., period]。各層の fill*period を全部含める。
+   RCWASolver::addLayer() は全層のセル境界 (先頭/末尾のセル) が一致することを
+   要求するため、層ごとに自分の fill だけで境界を作ると、fill の違う層が
+   混ざった時点で "The new layer does not match layers before!" で層が捨てられ、
+   その後の solve() で落ちていた (fill が全層同じ既存サンプルでは顕在化しない)。
+   区分一定の誘電率を同じ値のセルに細分しても Fourier 係数は変わらない。 */
+std::vector<double> commonEdges(double period, bool useY)
 {
-	Eigen::VectorXs cx(3);
-	cx << 0.0, l.fill * period, period;
-	Eigen::VectorXs cy(2);
-	cy << 0.0, period;
-	Eigen::MatrixXcs eps(1, 2);
-	eps << scalex(l.eps1, l.eps1i), scalex(l.eps2, l.eps2i);
+	std::vector<double> e;
+	e.push_back(0.0);
+	for (int n = 0; n < NRcwaLayer; n++) {
+		const double f = useY ? RcwaLayer[n].fill_y : RcwaLayer[n].fill;
+		if (f < 1.0) e.push_back(f * period);
+	}
+	e.push_back(period);
+	std::sort(e.begin(), e.end());
+	std::vector<double> u;
+	for (double v : e) {
+		if (u.empty() || (v - u.back()) > 1e-12 * period) u.push_back(v);
+	}
+	return u;
+}
+
+/* 1層 = 1 周期に eps1 の矩形 [0, fill*Λx] × [0, fill_y*Λy] が 1 つ、残りが eps2。
+   fill_y = 1 なら y 方向に一様 (1D 線格子)。xe / ye は commonEdges() の境界。
+   eps は (y セル行 × x セル列) */
+Layer makeLayer(const rcwalayer_t &l, const std::vector<double> &xe,
+                const std::vector<double> &ye)
+{
+	const double px = xe.back(), py = ye.back();
+	Eigen::VectorXs cx(xe.size()), cy(ye.size());
+	for (size_t i = 0; i < xe.size(); i++) cx[i] = xe[i];
+	for (size_t j = 0; j < ye.size(); j++) cy[j] = ye[j];
+	const scalex e1(l.eps1, l.eps1i), e2(l.eps2, l.eps2i);
+	Eigen::MatrixXcs eps(ye.size() - 1, xe.size() - 1);
+	for (int j = 0; j < eps.rows(); j++) {
+		const double yc = 0.5 * (ye[j] + ye[j + 1]);
+		for (int i = 0; i < eps.cols(); i++) {
+			const double xc = 0.5 * (xe[i] + xe[i + 1]);
+			const bool in1 = (xc < l.fill * px) && (yc < l.fill_y * py);
+			eps(j, i) = in1 ? e1 : e2;
+		}
+	}
 	return Layer(cx, cy, eps);
 }
 
@@ -69,8 +104,15 @@ extern "C" int rcwa_run(FILE *fp_log)
 		return 1;
 	}
 
-	sprintf(str, "RCWA : N=%d (order %d), period=%.4e[m], %d layers, %d frequencies",
-		NRcwaHarmonics, 2 * NRcwaHarmonics + 1, RcwaPeriod, NRcwaLayer, NFreq1);
+	if (NRcwaHarmonicsY > 0) {
+		sprintf(str, "RCWA : 2D Nx=%d Ny=%d (orders %dx%d), period=%.4e x %.4e[m],"
+			" %d layers, %d frequencies",
+			NRcwaHarmonics, NRcwaHarmonicsY, 2 * NRcwaHarmonics + 1,
+			2 * NRcwaHarmonicsY + 1, RcwaPeriod, RcwaPeriodY, NRcwaLayer, NFreq1);
+	} else {
+		sprintf(str, "RCWA : N=%d (order %d), period=%.4e[m], %d layers, %d frequencies",
+			NRcwaHarmonics, 2 * NRcwaHarmonics + 1, RcwaPeriod, NRcwaLayer, NFreq1);
+	}
 	monitor1(fp_log, str);
 	sprintf(str, "RCWA : incidence theta=%.4g[deg] phi=%.4g[deg]", RcwaTheta, RcwaPhi);
 	monitor1(fp_log, str);
@@ -104,6 +146,9 @@ extern "C" int rcwa_run(FILE *fp_log)
 	   複素平方根の実部を取ることで eps<1 (プラズマ等) にも対応する。 */
 	const scalex eps_inc = scalex(RcwaLayer[0].eps1, RcwaLayer[0].eps1i);
 	const double n_inc = std::max(std::sqrt(eps_inc).real(), 1e-6);
+
+	const std::vector<double> xedges = commonEdges(RcwaPeriod, false);
+	const std::vector<double> yedges = commonEdges(RcwaPeriodY, true);
 
 	std::vector<int> stack(NRcwaLayer);
 	std::vector<scalar> thickness(NRcwaLayer);
@@ -139,10 +184,10 @@ extern "C" int rcwa_run(FILE *fp_log)
 		const double k0 = 2.0 * M_PI / lambda;
 
 		/* 層の固有値問題は波長依存のため周波数毎に解き直す */
-		RCWASolver solver(NRcwaHarmonics, 0);
+		RCWASolver solver(NRcwaHarmonics, NRcwaHarmonicsY);
 		solver.disablePML();
 		for (int n = 0; n < NRcwaLayer; n++) {
-			solver.addLayer(makeLayer(RcwaLayer[n], RcwaPeriod));
+			solver.addLayer(makeLayer(RcwaLayer[n], xedges, yedges));
 		}
 		/* 斜め入射の Bloch 波数。solve() より前に設定する必要がある */
 		solver.setBlochWavevector(k0 * n_inc * std::sin(thetaRad) * std::cos(phiRad),
@@ -208,8 +253,10 @@ extern "C" int rcwa_run(FILE *fp_log)
 		const char h5name[] = "time_series_data.h5";
 		rcwa_meta_t meta;
 		meta.title      = Title;
-		meta.nharmonics = NRcwaHarmonics;
-		meta.period     = RcwaPeriod;
+		meta.nharmonics   = NRcwaHarmonics;
+		meta.period       = RcwaPeriod;
+		meta.nharmonics_y = NRcwaHarmonicsY;
+		meta.period_y     = (NRcwaHarmonicsY > 0) ? RcwaPeriodY : 0.0;
 		meta.nlayer     = NRcwaLayer;
 		meta.theta      = RcwaTheta;
 		meta.phi        = RcwaPhi;

@@ -218,6 +218,9 @@ int main(int argc, char* argv[])
         meta.nharmonics = prob.nHx;
         // x 方向の周期 [m] (内部は μm)
         meta.period     = static_cast<double>(prob.xmax - prob.xmin) * 1e-6;
+        meta.nharmonics_y = prob.nHy;
+        meta.period_y     = (prob.nHy > 0)
+            ? static_cast<double>(prob.ymax - prob.ymin) * 1e-6 : 0.0;
         meta.nlayer     = 0;   // .orcwa は zmesh からスラブを組むため層数は不定
         meta.theta      = prob.theta;
         meta.phi        = prob.phi;

@@ -13,6 +13,8 @@ input data
 /* RCWA モードの入力 (orcwa_rcwa.h) */
 int          NRcwaHarmonics = 0;
 double       RcwaPeriod = 0;
+int          NRcwaHarmonicsY = 0;
+double       RcwaPeriodY = 0;
 int          NRcwaLayer = 0;
 rcwalayer_t  *RcwaLayer = NULL;
 double       RcwaTheta = 0;
@@ -463,9 +465,14 @@ int input_data(FILE *fp)
 			Plot3dGeom = atoi(token[2]);
 		}
 		else if (!strcmp(strkey, "rcwa")) {
-			if (ntoken > 3) {
+			/* rcwa = Nx Λx [Ny Λy]。Ny Λy は 2D 格子のときだけ書く */
+			if ((ntoken == 4) || (ntoken == 6)) {
 				NRcwaHarmonics = atoi(token[2]);
 				RcwaPeriod = atof(token[3]);
+				if (ntoken == 6) {
+					NRcwaHarmonicsY = atoi(token[4]);
+					RcwaPeriodY = atof(token[5]);
+				}
 			}
 			else {
 				printf(errfmt2, strkey);
@@ -490,6 +497,12 @@ int input_data(FILE *fp)
 				}
 				RcwaLayer[NRcwaLayer].eps1i = (ntoken > 7) ? atof(token[6]) : 0;
 				RcwaLayer[NRcwaLayer].eps2i = (ntoken > 7) ? atof(token[7]) : 0;
+				/* y 方向の占有率 (2D 格子)。虚部の組の後ろに置く (省略時 1 = y 一様) */
+				RcwaLayer[NRcwaLayer].fill_y = (ntoken > 8) ? atof(token[8]) : 1;
+				if (ntoken > 9) {
+					printf("*** rcwalayer #%d: too many values\n", NRcwaLayer + 1);
+					return 1;
+				}
 				NRcwaLayer++;
 			}
 			else {
@@ -520,9 +533,15 @@ int input_data(FILE *fp)
 			printf("%s\n", "*** rcwa needs at least 2 rcwalayer (incident/exit)");
 			return 1;
 		}
-		if ((NRcwaHarmonics < 0) || (RcwaPeriod <= 0)) {
+		if ((NRcwaHarmonics < 0) || (RcwaPeriod <= 0) ||
+		    (NRcwaHarmonicsY < 0) || ((NRcwaHarmonicsY > 0) && (RcwaPeriodY <= 0))) {
 			printf("%s\n", "*** invalid rcwa data");
 			return 1;
+		}
+		/* 1D (Ny 省略) では y 周期は意味を持たないので x と同じにしておく */
+		const int rcwa2d = (NRcwaHarmonicsY > 0);
+		if (!rcwa2d) {
+			RcwaPeriodY = RcwaPeriod;
 		}
 		if (NFreq1 <= 0) {
 			printf("%s\n", "*** rcwa needs frequency1 data");
@@ -543,10 +562,20 @@ int input_data(FILE *fp)
 			   禁止するのは「誘電率が完全にゼロ」と「利得媒質」のみ。
 			   時間規約 exp(-iwt) では損失が正の虚部なので、負の虚部は
 			   利得になり R+T>1 が出る (物理的な入力ミス)。 */
+			/* 2D では fill = 1 (x 方向に一様 = y 方向の線格子) も許す。
+			   1D で fill = 1 は「eps1 の一様層」と同じなので従来どおり弾く
+			   (一様層は eps1 = eps2 で書く)。 */
+			const int fill_over = rcwa2d ? (RcwaLayer[n].fill > 1) : (RcwaLayer[n].fill >= 1);
 			if (((RcwaLayer[n].eps1 == 0) && (RcwaLayer[n].eps1i == 0)) ||
 			    ((RcwaLayer[n].eps2 == 0) && (RcwaLayer[n].eps2i == 0)) ||
-			    (RcwaLayer[n].fill <= 0) || (RcwaLayer[n].fill >= 1)) {
+			    (RcwaLayer[n].fill <= 0) || fill_over ||
+			    (RcwaLayer[n].fill_y <= 0) || (RcwaLayer[n].fill_y > 1)) {
 				printf("*** invalid rcwalayer data #%d\n", n + 1);
+				return 1;
+			}
+			if (!rcwa2d && (RcwaLayer[n].fill_y < 1)) {
+				printf("*** rcwalayer #%d: fill_y < 1 needs a 2D grating"
+				       " (rcwa = Nx period_x Ny period_y)\n", n + 1);
 				return 1;
 			}
 			if ((RcwaLayer[n].eps1i < 0) || (RcwaLayer[n].eps2i < 0)) {

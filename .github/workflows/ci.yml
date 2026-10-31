@@ -155,6 +155,13 @@ jobs:
           print(f"RCWA Fresnel OK: R={R:.5f}, T={T:.5f}, A={A:.5f}, R+T={RT:.5f}")
           PY
 
+      # .ofd の 2D 格子 (rcwa = Nx Λx Ny Λy / fill_y)。1D との一致・C4 対称・
+      # 90° 回転・.orcwa 経路との一致と、fill の違う層の混在 (以前は落ちていた)。
+      - name: RCWA 2D gratings (.ofd path)
+        run: |
+          python3 ci/check_rcwa_ofd2d.py --orcwa "$GITHUB_WORKSPACE/bin/orcwa" \
+            --orcwa-rcwa "$GITHUB_WORKSPACE/bin/orcwa_rcwa"
+
       # data/sample/ の RCWA サンプルを一通り実行する。解析解が分かっている
       # ものは値そのものを、それ以外は吸収込みのエネルギー保存 R+T+A=1 を
       # 検証する (Drude 金属は損失があるので R+T<1 になる)。
@@ -206,6 +213,15 @@ jobs:
               if ($3 > 1e-6) { print "AR coating R too large at design freq:", $3; exit 1 } } }
             END { if (!found) { print "design frequency row not found"; exit 1 } }' rcwa_efficiency.csv
           echo "  ar_coating OK"
+          # --- .ofd の 2D 格子: 正方格子の正方形柱。法線入射で TE = TM, R+T = 1 ---
+          cp "$GITHUB_WORKSPACE/data/sample/rcwa_rect2d.ofd" .
+          "$GITHUB_WORKSPACE/bin/orcwa" -n 2 rcwa_rect2d.ofd > r2d.log 2>&1
+          grep -q "normal end" r2d.log
+          grep -q "RCWA : 2D Nx=4 Ny=4" orcwa.log
+          awk -F, 'NR>1 {
+              if (($3-$5)^2 > 1e-12 || ($4-$6)^2 > 1e-12) { print "2D square: TE != TM:", $0; exit 1 }
+              if ((($3+$4)-1)^2 > 1e-12 || (($5+$6)-1)^2 > 1e-12) { print "2D square: R+T != 1:", $0; exit 1 } }' rcwa_efficiency.csv
+          echo "  rcwa_rect2d OK"
           # --- .ofd の斜め入射: ブリュースター角で R_TM=0, R_TE=0.147929 ---
           cp "$GITHUB_WORKSPACE/data/sample/rcwa_oblique.ofd" .
           "$GITHUB_WORKSPACE/bin/orcwa" -n 2 rcwa_oblique.ofd > obl.log 2>&1
@@ -551,6 +567,13 @@ jobs:
           print(f"RCWA Fresnel OK: R={R:.5f}, T={T:.5f}, A={A:.5f}, R+T={RT:.5f}")
           PY
 
+      # .ofd の 2D 格子 (rcwa = Nx Λx Ny Λy / fill_y)。1D との一致・C4 対称・
+      # 90° 回転・.orcwa 経路との一致と、fill の違う層の混在 (以前は落ちていた)。
+      - name: RCWA 2D gratings (.ofd path)
+        run: |
+          python3 ci/check_rcwa_ofd2d.py --orcwa "$GITHUB_WORKSPACE/bin/orcwa" \
+            --orcwa-rcwa "$GITHUB_WORKSPACE/bin/orcwa_rcwa"
+
       - name: Upload binaries (artifact)
         uses: actions/upload-artifact@v4
         with:
@@ -707,6 +730,14 @@ jobs:
           if ([math]::Abs($RT - 1.0) -gt 1e-3) { Write-Error "R+T=$RT expected ~1"; exit 1 }
           if ([math]::Abs($A) -gt 1e-3) { Write-Error "A=$A expected ~0 (lossless)"; exit 1 }
           Write-Host "RCWA Fresnel OK: R=$R, T=$T, A=$A, R+T=$RT"
+
+      # .ofd の 2D 格子。Windows は Eigen フォールバック経路 (対角摂動あり) なので
+      # 厳密な対称性の破れが LAPACKE 経路より大きい (許容差はスクリプト側で設定)。
+      - name: RCWA 2D gratings (.ofd path)
+        run: |
+          python ci/check_rcwa_ofd2d.py --orcwa "$env:GITHUB_WORKSPACE\bin\orcwa.exe" `
+            --orcwa-rcwa "$env:GITHUB_WORKSPACE\bin\orcwa_rcwa.exe"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
 
       - name: Upload binaries (artifact)
         uses: actions/upload-artifact@v4

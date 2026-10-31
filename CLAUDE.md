@@ -66,12 +66,15 @@ $OLDPWD/bin/orcwa -n 2 grating.ofd && cat rcwa_efficiency.csv
 
 ## RCWA コアの規則 (数値安定性 — 実際に踏んだもの)
 
-- `.ofd` 入力キー: `rcwa = <N> <period[m]>` / `rcwalayer = <eps1r> <eps2r> <fill>
-  <thickness[m]> [<eps1i> <eps2i>]` / `planewave = <θ> <φ> <pol>`。
+- `.ofd` 入力キー: `rcwa = <Nx> <period_x[m]> [<Ny> <period_y[m]>]` /
+  `rcwalayer = <eps1r> <eps2r> <fill> <thickness[m]> [<eps1i> <eps2i> [<fill_y>]]` /
+  `planewave = <θ> <φ> <pol>`。`Ny period_y` を書くと 2D 格子 (層は eps1 の矩形
+  `[0, fill·Λx]×[0, fill_y·Λy]`、`fill_y` 既定 1 = y 一様)。層ごとに fill が違って
+  よい (ブリッジが全層共通のセル格子を作る。以前は fill 混在で落ちていた)。
   **厚みは物理長** (γ = k0·neff スケーリング前提)。誘電率の虚部は省略可
   (正 = 損失、実部が負の金属も可)。`planewave` の pol は無視され、TE/TM 両方を
-  常に出力する。`.ofd` 経路は 1D・単一周期・分散なしに限られる (2D や分散は
-  `.orcwa` + `orcwa_rcwa`)。
+  常に出力する。`.ofd` 経路は分散なし・層形状は矩形 1 つまで (分散や円柱など
+  任意形状は `.orcwa` + `orcwa_rcwa`)。2D の検証は `ci/check_rcwa_ofd2d.py`。
 - 固有値ソルバーは `rcwa/MKLEigenSolver.hpp` の 3 分岐
   (MKL / LAPACKE / Eigen フォールバック)。**±m 次数の縮退固有値**で
   固有ベクトル基底が不良条件になり回折効率が発散する事象があるため、

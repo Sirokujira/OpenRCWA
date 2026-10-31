@@ -122,6 +122,8 @@ int rcwa_write_hdf5(const char *filename,
 	write_pol_labels(meta_gid, npol, pol_labels);
 	write_scalar_int(meta_gid, "rcwa_harmonics", meta->nharmonics);
 	write_scalar_double(meta_gid, "rcwa_period", meta->period);
+	write_scalar_int(meta_gid, "rcwa_harmonics_y", meta->nharmonics_y);
+	write_scalar_double(meta_gid, "rcwa_period_y", meta->period_y);
 	write_scalar_int(meta_gid, "rcwa_nlayer", meta->nlayer);
 	write_scalar_double(meta_gid, "theta", meta->theta);
 	write_scalar_double(meta_gid, "phi", meta->phi);

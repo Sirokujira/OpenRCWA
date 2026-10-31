@@ -53,8 +53,10 @@ typedef struct {
 /* 計算条件 */
 typedef struct {
 	const char *title;
-	int    nharmonics;
-	double period;     /* [m]。.orcwa 経路など不定なら 0 */
+	int    nharmonics;   /* x 方向の高調波次数 Nx */
+	double period;       /* x 方向の周期 [m]。.orcwa 経路など不定なら 0 */
+	int    nharmonics_y; /* y 方向の高調波次数 Ny (1D 格子なら 0) */
+	double period_y;     /* y 方向の周期 [m] (1D 格子なら 0) */
 	int    nlayer;
 	double theta;      /* [deg] */
 	double phi;        /* [deg] */

@@ -1,0 +1,22 @@
+OpenRCWA 4 2
+title = RCWA sample: 2D square lattice of square glass pillars (.ofd)
+#
+# .ofd 経路 (GUI) の 2D 格子。rcwa に y 方向の次数と周期を足すと 2D になる:
+#   rcwa      = <Nx> <period_x[m]> [<Ny> <period_y[m]>]
+#   rcwalayer = <eps1r> <eps2r> <fill> <thickness[m]> [<eps1i> <eps2i> [<fill_y>]]
+# eps1 が 1 周期内の矩形 [0, fill*period_x] x [0, fill_y*period_y] を占め、
+# 残りが eps2。fill_y を省略すると 1 (y 方向に一様 = 従来の 1D 線格子)。
+# fill_y を書くときは虚部の組 (無損失なら 0 0) を先に書く。
+#
+#   周期 = 0.5 um (x, y とも) / 柱 = 0.3 um 角の正方形 / 高さ = 0.2 um
+#   入射側 = 空気、透過側 = ガラス基板
+#
+# 正方格子の正方形柱なので、法線入射では TE と TM が一致する (C4 対称)。
+# 無損失なので R+T = 1。波長は 0.62-0.9 um (Wood アノマリーの 0.5 um を避ける)。
+rcwa = 4 5.0e-7 4 5.0e-7
+rcwalayer = 1.0 1.0 0.5 0
+rcwalayer = 2.25 1.0 0.6 2.0e-7 0 0 0.6
+rcwalayer = 2.25 2.25 0.5 0
+planewave = 0 0 1
+frequency1 = 3.331e14 4.835e14 8
+end
