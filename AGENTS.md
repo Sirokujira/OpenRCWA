@@ -43,6 +43,8 @@ cmake --build build -j"$(nproc)"
 
 ```bash
 ./bin/tests/test_rcwa_input   # RCWA 単体テスト (パーサ/ドライバ/場出力)
+./bin/tests/test_core_integrators  # core/ の積分器 (解析解・収束・積分器の一致, 約 40 秒)
+ctest --test-dir build        # 上の 2 本 + .ofd 経路 (2D / 分散 / 次数別効率) の一式
 
 # .ofd 経路の RCWA スモーク (全周波数・両偏波で |R+T-1| <= 3e-3)
 mkdir -p /tmp/smoke && cp data/sample/grating.ofd /tmp/smoke/ && cd /tmp/smoke
@@ -61,6 +63,14 @@ $OLDPWD/bin/orcwa -n 2 grating.ofd && cat rcwa_efficiency.csv
   `test_rcwa_input` と `orcwa_rcwa` の Fresnel スモークは **Linux / macOS /
   Windows の 3 ジョブすべて**で実行する (固有値の経路が Linux/macOS =
   LAPACKE、Windows = Eigen フォールバックと異なるため)。
+- `core/` の積分器 (`RCWAIntegrator` / `DifferentialIntegrator` /
+  `RedhefferIntegrator`) は `tests/test_core_integrators.cpp` で判定する:
+  一様区間の S 行列 = `diag(exp(i·γ·L/k0))` (γ は k0² スケールの PQ の固有値の
+  平方根、伝搬長は L/k0 に正規化 — `RCWAScatterMatrix::normalizedLz_`)、
+  境界が動く区間での RCWA の 2 次収束 (区間数 2 倍で誤差約 1/4)、
+  Differential / Redheffer と細かい RCWA の一致。`test_cpu` などの旧テストは
+  正解データ作成に 1 日かかるベンチマークで判定を持たないので CI では回さない。
+  旧テストと同じく gdstk/core 依存なので `WITH_RCWA_LEGACY_TESTS` (MSVC は OFF)。
 
 ## 実行
 

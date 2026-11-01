@@ -31,7 +31,10 @@ $OLDPWD/bin/orcwa -n 2 grating.ofd && cat rcwa_efficiency.csv
 # RCWA 単体テスト (パーサ/ドライバ/場出力)
 ./bin/tests/test_rcwa_input
 
-# RCWA の回帰テスト一式 (test_rcwa_input + .ofd 経路の 2D / 分散 / 次数別効率)
+# core/ の積分器 (解析解・2 次収束・積分器どうしの一致)
+./bin/tests/test_core_integrators
+
+# RCWA の回帰テスト一式 (上の 2 本 + .ofd 経路の 2D / 分散 / 次数別効率)
 ctest --test-dir build
 ```
 

@@ -59,7 +59,8 @@ jobs:
       - name: libc++ compile check (macOS 互換性の先行検出)
         run: |
           fail=0
-          for f in rcwa/*.cpp src/rcwa_Main.cpp tests/test_rcwa_input.cpp; do
+          for f in rcwa/*.cpp src/rcwa_Main.cpp tests/test_rcwa_input.cpp \
+                   tests/test_core_integrators.cpp sol/rcwa_bridge.cpp; do
             if ! clang++ -std=c++17 -stdlib=libc++ -fsyntax-only \
                  -I/usr/include/eigen3 -Iinclude -I. "$f"; then
               echo "libc++ compile check failed: $f"
@@ -131,6 +132,12 @@ jobs:
           mkdir -p /tmp/rcwa-unit && cd /tmp/rcwa-unit
           # 終了コード = 失敗数。0 (全 PASS) でなければジョブが落ちる。
           "$GITHUB_WORKSPACE/bin/tests/test_rcwa_input" | tee rcwa_unit.log
+          # core/ の積分器 (RCWA / Differential / Redheffer) の短時間回帰テスト。
+          # 一様区間の解析解・2 次の収束・積分器どうしの一致を許容値つきで判定する
+          # (test_cpu は正解データ作成に 1 日かかるベンチマークなので CI では回さない)。
+          "$GITHUB_WORKSPACE/bin/tests/test_core_integrators" > core_integrators.log 2>&1 \
+            || { grep -E "  ok|  NG|FAILED" core_integrators.log; exit 1; }
+          grep -E "^\[|  ok|  NG|PASSED" core_integrators.log
 
       - name: Smoke test — orcwa_rcwa (.orcwa Fresnel)
         run: |
@@ -558,6 +565,12 @@ jobs:
           mkdir -p /tmp/rcwa-unit && cd /tmp/rcwa-unit
           # 終了コード = 失敗数。0 (全 PASS) でなければジョブが落ちる。
           "$GITHUB_WORKSPACE/bin/tests/test_rcwa_input" | tee rcwa_unit.log
+          # core/ の積分器 (RCWA / Differential / Redheffer) の短時間回帰テスト。
+          # 一様区間の解析解・2 次の収束・積分器どうしの一致を許容値つきで判定する
+          # (test_cpu は正解データ作成に 1 日かかるベンチマークなので CI では回さない)。
+          "$GITHUB_WORKSPACE/bin/tests/test_core_integrators" > core_integrators.log 2>&1 \
+            || { grep -E "  ok|  NG|FAILED" core_integrators.log; exit 1; }
+          grep -E "^\[|  ok|  NG|PASSED" core_integrators.log
 
       - name: Smoke test — orcwa_rcwa (.orcwa Fresnel)
         run: |

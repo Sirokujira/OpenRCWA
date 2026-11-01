@@ -130,6 +130,24 @@ add_exe(test_cpu
     ${ROOT_TESTS_DIR})
 set_property(TARGET test_cpu PROPERTY CXX_STANDARD 17)
 
+# core/ の積分器の短時間回帰テスト (解析解・収束・積分器どうしの一致)。
+# test_cpu は正解データ作成に 1 日かかるベンチマークなので、CTest にはこちらを載せる。
+add_exe(test_core_integrators
+    test_core_integrators.cpp
+    ${RCWA_SRC_FILES}
+    ${ROOT_SRC_DIR}/core/LayerSampler.cpp
+    ${ROOT_SRC_DIR}/core/VarLayerSampler.cpp
+    ${ROOT_SRC_DIR}/core/RedhefferIntegrator.cpp
+    ${ROOT_SRC_DIR}/core/RCWAIntegrator.cpp
+    ${ROOT_SRC_DIR}/core/DifferentialIntegrator.cpp
+  LINK_LIBRARIES
+    ${MKL_LIBRARIES}
+    ${TBB_LIBRARIES}
+    ${MATH_LIB}
+  OUT_DIR
+    ${ROOT_TESTS_DIR})
+set_property(TARGET test_core_integrators PROPERTY CXX_STANDARD 17)
+
 add_exe(test_metasurface_cpu
     test_metasurface_cpu.cpp
     ${RCWA_SRC_FILES}

@@ -52,7 +52,7 @@ subprocess として起動されます。
 | `rcwa/` | RCWA コア: 層状周期構造の固有値問題 (`FourierSolver1D/2D`, `Layer`, `RCWASolver`)。MKL があれば LAPACKE、無ければ Eigen ソルバへフォールバック | `orcwa` に結線済み |
 | `core/` | RCWA の積分器 (`RCWAIntegrator` / `RedhefferIntegrator` / `DifferentialIntegrator`)。導波モード基底の別系統 | テストからのみ到達可 |
 | `gdstk/` | GDS 形状の取り扱い (gdstk 由来) | rcwa 用 |
-| `tests/` | RCWA の単体テスト `test_rcwa_input` (解析解比較つき) と旧テストバイナリ (`test_cpu`, `test_gds_cpu` ほか)。`WITH_RCWA` (既定 ON) | `test_rcwa_input` は CTest 登録済み。旧テストはビルドのみ |
+| `tests/` | RCWA の単体テスト `test_rcwa_input` (解析解比較つき)、`core/` 積分器の回帰テスト `test_core_integrators`、旧ベンチマーク (`test_cpu`, `test_gds_cpu` ほか)。`WITH_RCWA` (既定 ON) | 前 2 本は CTest 登録済み・CI で実行。旧ベンチマークはビルドのみ |
 | `python/` | 入力生成スクリプト (`datalib/sample_rcwa_grating.py` など) | FDTD 前提 |
 | `post/` | ポスト処理 (ev2/ev3、周波数/遠方界/近傍界プロット、HDF5 読込) | 動作 |
 
@@ -138,7 +138,7 @@ frequency1 = 4.3e14 7.5e14 16
 RCWA の回帰テストは CTest に登録してあります:
 
 ```sh
-ctest --test-dir build    # test_rcwa_input + .ofd 経路 (2D / 分散 / 次数別効率)
+ctest --test-dir build    # test_rcwa_input + core/ 積分器 + .ofd 経路 (2D / 分散 / 次数別効率)
 ```
 
 ### FDTD モード
@@ -163,8 +163,9 @@ grep "normal end" orcwa.log
 1. RCWA モード: 入射角の掃引はカーネル 1 回につき 1 角度 (GUI が角度ごとに
    orcwa を実行する)。円柱など任意形状の層は `.ofd` 経路では書けない
    (`.orcwa` 経路で対応)
-2. 旧テストバイナリ (`tests/` の `test_cpu` / `test_gds_cpu` ほか) の基準データ
-   同梱 + 許容閾値 + CTest 登録
+2. `core/` の積分器は `test_core_integrators` (解析解・収束・積分器どうしの一致、
+   許容値つき、CTest 登録済み) で回帰を見ている。`test_cpu` / `test_gds_cpu` など
+   研究用ベンチマークの大規模な正解データ (8192 区間で 1 日がかり) は同梱しない
 
 ## Reference
 
