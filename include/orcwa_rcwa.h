@@ -29,8 +29,8 @@ typedef struct {
 	double eps2;
 	double eps1i;      /* eps1 の虚部 (省略時 0)。正 = 損失 */
 	double eps2i;      /* eps2 の虚部 (省略時 0)。正 = 損失 */
-	double fill;       /* eps1 の x 方向の占有率 (1D: 0 < fill < 1, 2D: 0 < fill <= 1) */
-	double fill_y;     /* eps1 の y 方向の占有率 (0 < fill_y <= 1, 省略時 1) */
+	double fill;       /* eps1 の x 方向の占有率 [0, 1] (0 / 1 は一様層) */
+	double fill_y;     /* eps1 の y 方向の占有率 [0, 1] (省略時 1) */
 	double thickness;  /* 層厚 [m] (先頭/末尾の半無限層では無視) */
 } rcwalayer_t;
 

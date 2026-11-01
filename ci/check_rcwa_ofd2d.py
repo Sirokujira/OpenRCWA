@@ -4,7 +4,8 @@
 orcwa を実際に走らせ、厳密に成り立つはずの関係で判定する:
 
   0. fill の違う層の混在: 一様層 (eps1 = eps2) の fill は結果に効かない。
-     以前は層ごとの fill が違うだけで orcwa が落ちていた。
+     以前は層ごとの fill が違うだけで orcwa が落ちていた。端の値 fill = 0 / 1
+     (一様層) も受け付ける (以前の 1D は入力エラーにしていた)。
   1. 1D との一致: fill_y = 1 (y 一様) の 2D 入力は、同じ構造の 1D 入力と
      同じ R/T になる (法線入射・斜め入射の両方)。
   2. C4 対称: 正方格子の正方形柱を法線入射で解くと TE と TM が一致し、
@@ -121,6 +122,13 @@ def main():
             b = read_ofd_csv(run(orcwa, work, f"mixed_{tag}", ofd("mixed", rc, mixed, 20, 30), ["-n", "2"]))
             d = maxdiff(a, b, keys)
             check(d < 1e-7, f"{tag}: max|diff| = {d:.2e} (< 1e-7)", failures)
+            # 端の値 fill = 0 / 1 (GUI は一様層をこう書くことがある)。以前の 1D は
+            # fill <= 0 / >= 1 を入力エラーにしていて GUI の入力が通らなかった
+            edge = ["1 1 1 0" + (" 0 0 1" if tag == "2D" else ""), same[1],
+                    f"{EPS_SUB} {EPS_SUB} 0 0" + (" 0 0 0" if tag == "2D" else "")]
+            c = read_ofd_csv(run(orcwa, work, f"edge_{tag}", ofd("edge", rc, edge, 20, 30), ["-n", "2"]))
+            d = maxdiff(a, c, keys)
+            check(d < 1e-7, f"{tag}: 一様層を fill 0 / 1 で書いても同じ: max|diff| = {d:.2e}", failures)
 
         print("[1] fill_y = 1 の 2D 入力 = 1D 入力")
         for theta, phi in ((0, 0), (20, 30)):

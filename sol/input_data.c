@@ -583,14 +583,15 @@ int input_data(FILE *fp)
 			   禁止するのは「誘電率が完全にゼロ」と「利得媒質」のみ。
 			   時間規約 exp(-iwt) では損失が正の虚部なので、負の虚部は
 			   利得になり R+T>1 が出る (物理的な入力ミス)。 */
-			/* 2D では fill = 1 (x 方向に一様 = y 方向の線格子) も許す。
-			   1D で fill = 1 は「eps1 の一様層」と同じなので従来どおり弾く
-			   (一様層は eps1 = eps2 で書く)。 */
-			const int fill_over = rcwa2d ? (RcwaLayer[n].fill > 1) : (RcwaLayer[n].fill >= 1);
+			/* fill / fill_y は [0, 1]。端の値は一様層になる (fill = 0 → eps2 だけ、
+			   fill = 1 → eps1 だけ)。GUI (OpenFDTD-X) は一様層を fill 0 / 1 で
+			   書くことがあり、以前は 1D で fill = 0 / 1 を入力エラーにしていたため
+			   GUI の正しい入力がカーネルで止まっていた。ブリッジの共通セル格子は
+			   幅 0 のセルを作らないので数値的にも問題ない。 */
 			if (((RcwaLayer[n].eps1 == 0) && (RcwaLayer[n].eps1i == 0)) ||
 			    ((RcwaLayer[n].eps2 == 0) && (RcwaLayer[n].eps2i == 0)) ||
-			    (RcwaLayer[n].fill <= 0) || fill_over ||
-			    (RcwaLayer[n].fill_y <= 0) || (RcwaLayer[n].fill_y > 1)) {
+			    !(RcwaLayer[n].fill >= 0) || (RcwaLayer[n].fill > 1) ||
+			    !(RcwaLayer[n].fill_y >= 0) || (RcwaLayer[n].fill_y > 1)) {
 				printf("*** invalid rcwalayer data #%d\n", n + 1);
 				return 1;
 			}
