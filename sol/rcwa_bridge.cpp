@@ -217,7 +217,8 @@ extern "C" int rcwa_run(FILE *fp_log)
 	fprintf(csv, "frequency[Hz],lambda[m],R_TE,T_TE,R_TM,T_TM\n");
 
 	/* 回折次数ごとの効率。rcwa_efficiency.csv (GUI が読む 6 列) は変えずに
-	   別ファイルに出す。伝搬する次数 (R か T が 0 でない) だけを 1 行ずつ書く。
+	   別ファイルに出す。入射側か透過側のどちらかで伝搬する次数だけを 1 行ずつ書く
+	   (伝搬しない側の効率は 0)。
 	   次数 (m, n) は RCWASolver の並び k = (2Ny+1)·(m+Nx) + (n+Ny) */
 	const char ordname[] = "rcwa_orders.csv";
 	FILE *ord = fopen(ordname, "w");
@@ -276,9 +277,27 @@ extern "C" int rcwa_run(FILE *fp_log)
 			                          layerEps(n, 2, omega), xedges, yedges));
 		}
 		/* 斜め入射の Bloch 波数。solve() より前に設定する必要がある */
-		solver.setBlochWavevector(k0 * n_inc * std::sin(thetaRad) * std::cos(phiRad),
-		                          k0 * n_inc * std::sin(thetaRad) * std::sin(phiRad));
+		const double kx0 = k0 * n_inc * std::sin(thetaRad) * std::cos(phiRad);
+		const double ky0 = k0 * n_inc * std::sin(thetaRad) * std::sin(phiRad);
+		solver.setBlochWavevector(kx0, ky0);
 		solver.solve(lambda, stack, thickness);
+
+		/* 次数 (m, n) が入射側 / 透過側の半無限媒質で伝搬するか (格子方程式)。
+		   エバネッセント次数の効率は解析的には 0 だが、複素平方根の実装によっては
+		   Re(kz) に丸め誤差が残り 1e-33 程度の値になる (macOS の libc++ で実測)。
+		   「値が 0 か」では判定できないので、伝搬条件で判定して 0 に揃える。 */
+		const double kr2 = k0 * k0 * eps_inc.real();
+		const double kt2 = k0 * k0 * layerEps(NRcwaLayer - 1, 1, omega).real();
+		std::vector<char> propR(nOrd), propT(nOrd);
+		for (size_t k = 0; k < nOrd; k++) {
+			const int m = (int)(k / (size_t)nOrdY) - NRcwaHarmonics;
+			const int n = (int)(k % (size_t)nOrdY) - NRcwaHarmonicsY;
+			const double kx = kx0 + 2.0 * M_PI * m / RcwaPeriod;
+			const double ky = ky0 + 2.0 * M_PI * n / RcwaPeriodY;
+			const double kt = kx * kx + ky * ky;
+			propR[k] = (kt < kr2);
+			propT[k] = (kt < kt2);
+		}
 
 		/* 法線入射では TE = E//y (格子溝方向)、TM = E//x に退化する */
 		double R[2], T[2];
@@ -294,8 +313,8 @@ extern "C" int rcwa_run(FILE *fp_log)
 			if (((size_t)REF.size() == nOrd) && ((size_t)TRN.size() == nOrd)) {
 				const size_t base = ((size_t)pol * (size_t)NFreq1 + (size_t)ifreq) * nOrd;
 				for (size_t k = 0; k < nOrd; k++) {
-					ordR[base + k] = REF((Eigen::Index)k);
-					ordT[base + k] = TRN((Eigen::Index)k);
+					ordR[base + k] = propR[k] ? REF((Eigen::Index)k) : 0.0;
+					ordT[base + k] = propT[k] ? TRN((Eigen::Index)k) : 0.0;
 				}
 			}
 		}
@@ -303,7 +322,7 @@ extern "C" int rcwa_run(FILE *fp_log)
 		for (int pol = 0; pol < 2; pol++) {
 			const size_t base = ((size_t)pol * (size_t)NFreq1 + (size_t)ifreq) * nOrd;
 			for (size_t k = 0; k < nOrd; k++) {
-				if ((ordR[base + k] == 0.0) && (ordT[base + k] == 0.0)) continue;
+				if (!propR[k] && !propT[k]) continue;
 				const int m = (int)(k / (size_t)nOrdY) - NRcwaHarmonics;
 				const int n = (int)(k % (size_t)nOrdY) - NRcwaHarmonicsY;
 				fprintf(ord, "%.8e,%.8e,%s,%d,%d,%.8e,%.8e\n", freq, lambda,

@@ -331,8 +331,10 @@ planewave = <theta[deg]> <phi[deg]> <pol>
   伝搬する次数だけ) と HDF5 の `/rcwa/R_orders`・`T_orders` に出る。
   `rcwa_efficiency.csv` (GUI が読む 6 列) は変えないこと。次数の並びは
   `RCWASolver::evaluateAlphaBeta()` の `k = (2Ny+1)·(m+Nx) + (n+Ny)`
-  (kx = kx0 + 2πm/Λx)。伝搬判定は値が厳密に 0 かどうか (エバネッセント次数は
-  Re(kz)=0 で厳密に 0 になる)。検証は `ci/check_rcwa_ofd_orders.py`
+  (kx = kx0 + 2πm/Λx)。伝搬判定は**格子方程式** (kx²+ky² < k0²·Re(ε) を入射側 /
+  透過側で別々に) で行い、伝搬しない側は 0 に揃える。**値が 0 かどうかで判定しない
+  こと**: Linux ではエバネッセント次数が厳密に 0 になるが、macOS (libc++) は複素
+  平方根の丸めで 1e-33 程度が残り、全次数が「伝搬」扱いになって CI で落ちた。検証は `ci/check_rcwa_ofd_orders.py`
   (和 = 合計、格子方程式、法線入射の ±m 対称、斜め入射での m / n の符号)。
 
 - **誘電率の虚部は省略可** (省略時 0 = 無損失、従来の書式と後方互換)。
