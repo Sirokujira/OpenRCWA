@@ -74,7 +74,9 @@ ctest --test-dir build
 
 - `.ofd` 入力キー: `rcwa = <Nx> <period_x[m]> [<Ny> <period_y[m]>]` /
   `rcwalayer = <eps1r> <eps2r> <fill> <thickness[m]> [<eps1i> <eps2i> [<fill_y>]]` /
-  `planewave = <θ> <φ> <pol>`。`Ny period_y` を書くと 2D 格子 (層は eps1 の矩形
+  `rcwaincidence = <θ> <φ>` (無ければ `planewave = <θ> <φ> <pol>` の θ φ。
+  `planewave` は FDTD の入射方向と共用で意味が違うため GUI は `rcwaincidence` を
+  書く。検証 `ci/check_rcwa_ofd_incidence.py`)。`Ny period_y` を書くと 2D 格子 (層は eps1 の矩形
   `[0, fill·Λx]×[0, fill_y·Λy]`、`fill_y` 既定 1 = y 一様)。層ごとに fill が違って
   よい (ブリッジが全層共通のセル格子を作る。以前は fill 混在で落ちていた)。
   **厚みは物理長** (γ = k0·neff スケーリング前提)。誘電率の虚部は省略可

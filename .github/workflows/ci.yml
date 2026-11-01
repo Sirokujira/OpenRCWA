@@ -166,7 +166,7 @@ jobs:
       # C4 対称・90° 回転・.orcwa 経路との一致・fill の違う層の混在 (以前は落ちていた)。
       # 分散 (rcwadispersion): Drude 薄膜の解析解・.orcwa 経路との一致・極の加算。
       # 次数別効率 (rcwa_orders.csv / HDF5): 合計との一致・格子方程式・次数の符号。
-      - name: RCWA .ofd extensions (2D gratings, dispersion, orders)
+      - name: RCWA .ofd extensions (2D gratings, dispersion, orders, incidence)
         run: |
           python3 ci/check_rcwa_ofd2d.py --orcwa "$GITHUB_WORKSPACE/bin/orcwa" \
             --orcwa-rcwa "$GITHUB_WORKSPACE/bin/orcwa_rcwa"
@@ -174,6 +174,7 @@ jobs:
             --orcwa-rcwa "$GITHUB_WORKSPACE/bin/orcwa_rcwa" \
             --sample "$GITHUB_WORKSPACE/data/sample/rcwa_metal_drude.orcwa"
           python3 ci/check_rcwa_ofd_orders.py --orcwa "$GITHUB_WORKSPACE/bin/orcwa"
+          python3 ci/check_rcwa_ofd_incidence.py --orcwa "$GITHUB_WORKSPACE/bin/orcwa"
 
       # data/sample/ の RCWA サンプルを一通り実行する。解析解が分かっている
       # ものは値そのものを、それ以外は吸収込みのエネルギー保存 R+T+A=1 を
@@ -599,7 +600,7 @@ jobs:
       # C4 対称・90° 回転・.orcwa 経路との一致・fill の違う層の混在 (以前は落ちていた)。
       # 分散 (rcwadispersion): Drude 薄膜の解析解・.orcwa 経路との一致・極の加算。
       # 次数別効率 (rcwa_orders.csv / HDF5): 合計との一致・格子方程式・次数の符号。
-      - name: RCWA .ofd extensions (2D gratings, dispersion, orders)
+      - name: RCWA .ofd extensions (2D gratings, dispersion, orders, incidence)
         run: |
           python3 ci/check_rcwa_ofd2d.py --orcwa "$GITHUB_WORKSPACE/bin/orcwa" \
             --orcwa-rcwa "$GITHUB_WORKSPACE/bin/orcwa_rcwa"
@@ -607,6 +608,7 @@ jobs:
             --orcwa-rcwa "$GITHUB_WORKSPACE/bin/orcwa_rcwa" \
             --sample "$GITHUB_WORKSPACE/data/sample/rcwa_metal_drude.orcwa"
           python3 ci/check_rcwa_ofd_orders.py --orcwa "$GITHUB_WORKSPACE/bin/orcwa"
+          python3 ci/check_rcwa_ofd_incidence.py --orcwa "$GITHUB_WORKSPACE/bin/orcwa"
 
       - name: Upload binaries (artifact)
         uses: actions/upload-artifact@v4
@@ -768,7 +770,7 @@ jobs:
       # .ofd の RCWA 拡張 (2D 格子・分散)。Windows は Eigen フォールバック経路
       # (対角摂動あり) なので、厳密な対称性の破れが LAPACKE 経路より大きい
       # (許容差はスクリプト側で設定)。
-      - name: RCWA .ofd extensions (2D gratings, dispersion, orders)
+      - name: RCWA .ofd extensions (2D gratings, dispersion, orders, incidence)
         run: |
           python ci/check_rcwa_ofd2d.py --orcwa "$env:GITHUB_WORKSPACE\bin\orcwa.exe" `
             --orcwa-rcwa "$env:GITHUB_WORKSPACE\bin\orcwa_rcwa.exe"
@@ -778,6 +780,8 @@ jobs:
             --sample "$env:GITHUB_WORKSPACE\data\sample\rcwa_metal_drude.orcwa"
           if ($LASTEXITCODE -ne 0) { exit 1 }
           python ci/check_rcwa_ofd_orders.py --orcwa "$env:GITHUB_WORKSPACE\bin\orcwa.exe"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          python ci/check_rcwa_ofd_incidence.py --orcwa "$env:GITHUB_WORKSPACE\bin\orcwa.exe"
           if ($LASTEXITCODE -ne 0) { exit 1 }
 
       - name: Upload binaries (artifact)

@@ -21,6 +21,7 @@ int          NRcwaPole = 0;
 rcwapole_t   *RcwaPole = NULL;
 double       RcwaTheta = 0;
 double       RcwaPhi = 0;
+int          IRcwaIncidence = 0;
 
 
 int input_data(FILE *fp)
@@ -89,6 +90,7 @@ int input_data(FILE *fp)
 	RcwaLayer = NULL;
 	RcwaTheta = 0;
 	RcwaPhi = 0;
+	IRcwaIncidence = 0;
 
 	// read
 
@@ -481,6 +483,18 @@ int input_data(FILE *fp)
 				return 1;
 			}
 		}
+		else if (!strcmp(strkey, "rcwaincidence")) {
+			/* rcwaincidence = <theta[deg]> <phi[deg]> (RCWA の入射角)。
+			   planewave は FDTD の入射方向 (波が来る向き、GUI の既定 θ = 90°) と
+			   共用されるため、RCWA 専用の角度はこちらで書く。planewave より優先 */
+			if (ntoken != 4) {
+				printf(errfmt2, strkey);
+				return 1;
+			}
+			IRcwaIncidence = 1;
+			RcwaTheta = atof(token[2]);
+			RcwaPhi   = atof(token[3]);
+		}
 		else if (!strcmp(strkey, "rcwadispersion")) {
 			/* rcwadispersion = <layer(1..)> <side(1|2)> <einf> <ae> <be> <ce> */
 			if (ntoken != 8) {
@@ -549,6 +563,10 @@ int input_data(FILE *fp)
 		printf("%s\n", "*** rcwadispersion needs rcwalayer data");
 		return 1;
 	}
+	if (IRcwaIncidence && (NRcwaLayer == 0)) {
+		printf("%s\n", "*** rcwaincidence needs rcwalayer data");
+		return 1;
+	}
 	if (NRcwaLayer > 0) {
 		if (NRcwaLayer < 2) {
 			printf("%s\n", "*** rcwa needs at least 2 rcwalayer (incident/exit)");
@@ -568,14 +586,17 @@ int input_data(FILE *fp)
 			printf("%s\n", "*** rcwa needs frequency1 data");
 			return 1;
 		}
-		/* 入射方向は planewave キーから取る (無指定なら法線入射)。
-		   pol は使わない — RCWA モードは常に TE/TM 両方を計算する。 */
-		if (IPlanewave) {
+		/* 入射方向は rcwaincidence キー、無ければ planewave キーから取る
+		   (どちらも無ければ法線入射)。planewave の pol は使わない —
+		   RCWA モードは常に TE/TM 両方を計算する。 */
+		if (!IRcwaIncidence && IPlanewave) {
 			RcwaTheta = Planewave.theta;
 			RcwaPhi   = Planewave.phi;
 		}
 		if ((RcwaTheta <= -90.0) || (RcwaTheta >= 90.0)) {
-			printf("%s\n", "*** rcwa planewave theta must be within (-90, 90) deg");
+			printf("%s\n", IRcwaIncidence
+			       ? "*** rcwaincidence theta must be within (-90, 90) deg"
+			       : "*** rcwa planewave theta must be within (-90, 90) deg");
 			return 1;
 		}
 		for (int n = 0; n < NRcwaLayer; n++) {
