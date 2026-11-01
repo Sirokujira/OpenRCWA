@@ -43,6 +43,8 @@ cmake --build build -j"$(nproc)"
 
 ```bash
 ./bin/tests/test_rcwa_input   # RCWA 単体テスト (パーサ/ドライバ/場出力)
+./bin/tests/test_core_integrators  # core/ の積分器 (解析解・収束・積分器の一致, 約 40 秒)
+ctest --test-dir build        # 上の 2 本 + .ofd 経路 (2D / 分散 / 次数別効率) の一式
 
 # .ofd 経路の RCWA スモーク (全周波数・両偏波で |R+T-1| <= 3e-3)
 mkdir -p /tmp/smoke && cp data/sample/grating.ofd /tmp/smoke/ && cd /tmp/smoke
@@ -61,6 +63,14 @@ $OLDPWD/bin/orcwa -n 2 grating.ofd && cat rcwa_efficiency.csv
   `test_rcwa_input` と `orcwa_rcwa` の Fresnel スモークは **Linux / macOS /
   Windows の 3 ジョブすべて**で実行する (固有値の経路が Linux/macOS =
   LAPACKE、Windows = Eigen フォールバックと異なるため)。
+- `core/` の積分器 (`RCWAIntegrator` / `DifferentialIntegrator` /
+  `RedhefferIntegrator`) は `tests/test_core_integrators.cpp` で判定する:
+  一様区間の S 行列 = `diag(exp(i·γ·L/k0))` (γ は k0² スケールの PQ の固有値の
+  平方根、伝搬長は L/k0 に正規化 — `RCWAScatterMatrix::normalizedLz_`)、
+  境界が動く区間での RCWA の 2 次収束 (区間数 2 倍で誤差約 1/4)、
+  Differential / Redheffer と細かい RCWA の一致。`test_cpu` などの旧テストは
+  正解データ作成に 1 日かかるベンチマークで判定を持たないので CI では回さない。
+  旧テストと同じく gdstk/core 依存なので `WITH_RCWA_LEGACY_TESTS` (MSVC は OFF)。
 
 ## 実行
 
@@ -83,6 +93,8 @@ CI (Linux ジョブ) が全件を実行し、エネルギー保存と解析解�
 | `ar_coating.ofd` | `orcwa` | 1/4 波長 AR コート。設計波長 550nm で R≈0 |
 | `rcwa_oblique.ofd` | `orcwa` | 斜め入射 (ブリュースター角)。R_TM≈0, R_TE=0.147929 |
 | `rcwa_metal.ofd` | `orcwa` | 複素誘電率の金属薄膜。R=0.909420, T=0.084430, A>0 |
+| `rcwa_rect2d.ofd` | `orcwa` | 2D 格子 (正方格子の正方形柱)。法線入射で TE = TM、R+T=1 |
+| `rcwa_drude_film.ofd` | `orcwa` | 分散材料 (`rcwadispersion`) の Drude 金属薄膜。R+T<1, A>0。`rcwa_metal_drude.orcwa` と同じ構造 |
 | `grating.ofd` | `orcwa` | 周期格子の波長掃引。全点で R+T=1 |
 | `dipole.ofd` | `orcwa` | FDTD (RCWA ではない)。無損失 (PEC+空気) なので **P_loss は全セル厳密に 0** |
 | `lossy_block.ofd` | `orcwa` | FDTD。電気損失材と磁気損失材のブロック。P_loss がその場所にだけ立つ |
@@ -155,8 +167,10 @@ R_TE 9e-6 / R_TM 8.7e-5)。**新しい格子サンプルを足すときは、TE 
 |---|---|
 | `/metadata/solver_mode` | `"RCWA"` — FDTD と区別する目印 |
 | `/metadata/npol`, `pol_labels` | 偏波数と名前 (`.ofd` は 2 = TE/TM、`.orcwa` は 1) |
-| `/metadata/NFreq`, `theta`, `phi`, `rcwa_harmonics`, `rcwa_period`, `rcwa_nlayer`, `Title` | 計算条件 |
+| `/metadata/NFreq`, `theta`, `phi`, `rcwa_harmonics`, `rcwa_period`, `rcwa_harmonics_y`, `rcwa_period_y`, `rcwa_nlayer`, `Title` | 計算条件 (`_y` は 1D 格子なら 0) |
 | `/rcwa/spectrum` | compound **[npol][NFreq]** = `{frequency[Hz], lambda[m], R, T, A}` |
+| `/rcwa/R_orders`, `/rcwa/T_orders` | double **[npol][NFreq][2Nx+1][2Ny+1]** = 回折次数ごとの効率 (`.ofd` 経路のみ。エバネッセント次数は 0) |
+| `/rcwa/order_m`, `/rcwa/order_n` | 各軸の次数 (−Nx..Nx / −Ny..Ny) |
 
 - **`spectrum` は 2 次元**なので、偏波ごとに 1 本の曲線として素直に読める。
 - **波長は [m]**。`.orcwa` の内部単位は μm だが、書き出し時に m へ揃えてある。
@@ -295,10 +309,35 @@ python3 ci/check_ploss.py lossy --sigma-e 0.5 --sigma-m 0.3 time_series_data.h5
 `rcwa` / `rcwalayer` キーが要る (`.orcwa` の `geometry` 系は読まれない)。
 
 ```
-rcwa      = <N> <period[m]>
-rcwalayer = <eps1r> <eps2r> <fill> <thickness[m]> [<eps1i> <eps2i>]
+rcwa      = <Nx> <period_x[m]> [<Ny> <period_y[m]>]
+rcwalayer = <eps1r> <eps2r> <fill> <thickness[m]> [<eps1i> <eps2i> [<fill_y>]]
 planewave = <theta[deg]> <phi[deg]> <pol>
 ```
+
+- **2D 格子**: `rcwa` に `Ny period_y` を足すと 2D になる (省略時は従来の 1D)。
+  各層は「1 周期内に eps1 の矩形 `[0, fill·Λx] × [0, fill_y·Λy]` が 1 つ、残りが
+  eps2」。`fill_y` の既定は 1 (y 方向に一様 = 1D 線格子) で、書くときは虚部の組
+  (無損失なら `0 0`) を先に書く。1D で `fill_y < 1` は入力エラー。
+  `fill` / `fill_y` は **[0, 1]** (端の値は一様層: 0 → eps2 だけ、1 → eps1 だけ)。
+  GUI (OpenFDTD-X) は一様層を fill 0 / 1 で書くことがあり、以前の 1D は
+  fill ≤ 0 / ≥ 1 を入力エラーにしていたため GUI の入力がカーネルで止まっていた。
+- **層ごとに fill が違ってよい**。ブリッジは全層の fill の境界を合わせた共通の
+  セル格子で各層を作る (`commonEdges()`)。`RCWASolver::addLayer()` は全層の
+  セル境界が一致しないと層を黙って捨てるため、以前は格子層の fill を一様層と
+  違う値にするだけで orcwa が Segmentation fault で落ちていた (既存サンプルは
+  全層 fill=0.5 だったので見つからなかった)。同じ値のセルへの細分は
+  Fourier 係数を変えないので結果は変わらない。
+- 2D の検証は `ci/check_rcwa_ofd2d.py` (1D との一致・C4 対称・90° 回転・
+  `.orcwa` 経路との一致・fill 混在)。CI の Linux / macOS / Windows で実行する。
+- **回折次数ごとの効率**は `rcwa_orders.csv` (`frequency[Hz],lambda[m],pol,m,n,R,T`、
+  伝搬する次数だけ) と HDF5 の `/rcwa/R_orders`・`T_orders` に出る。
+  `rcwa_efficiency.csv` (GUI が読む 6 列) は変えないこと。次数の並びは
+  `RCWASolver::evaluateAlphaBeta()` の `k = (2Ny+1)·(m+Nx) + (n+Ny)`
+  (kx = kx0 + 2πm/Λx)。伝搬判定は**格子方程式** (kx²+ky² < k0²·Re(ε) を入射側 /
+  透過側で別々に) で行い、伝搬しない側は 0 に揃える。**値が 0 かどうかで判定しない
+  こと**: Linux ではエバネッセント次数が厳密に 0 になるが、macOS (libc++) は複素
+  平方根の丸めで 1e-33 程度が残り、全次数が「伝搬」扱いになって CI で落ちた。検証は `ci/check_rcwa_ofd_orders.py`
+  (和 = 合計、格子方程式、法線入射の ±m 対称、斜め入射での m / n の符号)。
 
 - **誘電率の虚部は省略可** (省略時 0 = 無損失、従来の書式と後方互換)。
   損失は **正**の虚部 (exp(−iωt))。負は利得なので入力チェックで弾く。
@@ -308,10 +347,16 @@ planewave = <theta[deg]> <phi[deg]> <pol>
   `planewave` 自体を省略すると法線入射。θ は (−90, 90)。
 - 偏波基底と Bloch 波数の決め方は `rcwa/RCWADriver.cpp` と**同一にすること**。
   正規化 (1/kzinc) と対で決まっており、片方だけ変えると斜め入射で R+T≠1 になる。
-- **`.ofd` 経路は分散 (波長依存) を扱えない**。`rcwalayer` の誘電率は固定値
-  なので、金属など分散の効く材料は設計波長近傍でしか意味を持たない。
-  波長依存が必要なら `.orcwa` の `material_dispersion` + `orcwa_rcwa` を使う。
-- **`.ofd` 経路は 1D・単一周期のみ**。2D 格子は `.orcwa` 経路が必要。
+- **分散材料**: `rcwadispersion = <layer(1..)> <side(1|2)> <einf> <ae> <be> <ce>`
+  [rad/s] で層の eps1 (side=1) / eps2 (side=2) に Lorentz 極を与える
+  (`eps = einf + Σ ae²/(ce²−ω²−i·be·ω)`)。意味付けは `.orcwa` の
+  `material_dispersion` と同じ: 同じ (layer, side) の複数行は極の**加算**、
+  einf は最後の行、ae≠0 の極が 1 つでもあれば `rcwalayer` の静的な値は使わない。
+  be>0 が損失、be<0 (利得) は入力エラー。一様層は eps1 / eps2 の両方に書く。
+  Drude 金属は `ce=0, ae=ωp, be=γ`。検証は `ci/check_rcwa_ofd_dispersion.py`
+  (Drude 薄膜を特性行列法と比べて 5e-10、`rcwa_metal_drude.orcwa` と 4e-9)。
+- **`.ofd` 経路の層形状は「矩形 1 つ」まで**。円柱など任意形状の 2D 格子は
+  `.orcwa` 経路 (`geometry`) が必要。
 
 ## `.orcwa` 入力の要点
 

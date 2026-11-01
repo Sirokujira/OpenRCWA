@@ -620,3 +620,36 @@ if(WITH_DATALIB)
     add_executable(sample_rcwa_grating datalib/sample_rcwa_grating.c)
     target_link_libraries(sample_rcwa_grating PRIVATE orcwa_datalib)
 endif()
+
+# ============================================================
+# CTest: RCWA の回帰テスト (ctest --test-dir build で実行)
+#   rcwa_unit         : test_rcwa_input (.orcwa パーサ / ドライバ / 場出力)
+#   rcwa_ofd_*        : .ofd 経路 (orcwa 内蔵ブリッジ) の 2D 格子・分散・次数別効率
+#   rcwa_core_integrators : core/ の積分器 (解析解・収束・積分器どうしの一致)。
+#                       WITH_RCWA_LEGACY_TESTS (MSVC では OFF) のときだけ
+# .ofd 経路のテストは Python 3 のスクリプト (ci/check_rcwa_ofd_*.py) で、
+# orcwa を実際に走らせて解析解・対称性・.orcwa 経路との一致を確かめる。
+# CI も同じスクリプトを直接呼んでいる。
+# ============================================================
+if(WITH_RCWA)
+    enable_testing()
+    add_test(NAME rcwa_unit COMMAND test_rcwa_input)
+    if(TARGET test_core_integrators)
+        add_test(NAME rcwa_core_integrators COMMAND test_core_integrators)
+    endif()
+    find_package(Python3 COMPONENTS Interpreter QUIET)
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME rcwa_ofd_2d
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/ci/check_rcwa_ofd2d.py
+                    --orcwa $<TARGET_FILE:orcwa> --orcwa-rcwa $<TARGET_FILE:orcwa_rcwa>)
+        add_test(NAME rcwa_ofd_dispersion
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/ci/check_rcwa_ofd_dispersion.py
+                    --orcwa $<TARGET_FILE:orcwa> --orcwa-rcwa $<TARGET_FILE:orcwa_rcwa>
+                    --sample ${CMAKE_SOURCE_DIR}/data/sample/rcwa_metal_drude.orcwa)
+        add_test(NAME rcwa_ofd_orders
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/ci/check_rcwa_ofd_orders.py
+                    --orcwa $<TARGET_FILE:orcwa>)
+    else()
+        message(STATUS "Python 3 が見つからないので .ofd 経路の RCWA テスト (ctest) は登録しません")
+    endif()
+endif()

@@ -53,8 +53,10 @@ typedef struct {
 /* 計算条件 */
 typedef struct {
 	const char *title;
-	int    nharmonics;
-	double period;     /* [m]。.orcwa 経路など不定なら 0 */
+	int    nharmonics;   /* x 方向の高調波次数 Nx */
+	double period;       /* x 方向の周期 [m]。.orcwa 経路など不定なら 0 */
+	int    nharmonics_y; /* y 方向の高調波次数 Ny (1D 格子なら 0) */
+	double period_y;     /* y 方向の周期 [m] (1D 格子なら 0) */
 	int    nlayer;
 	double theta;      /* [deg] */
 	double phi;        /* [deg] */
@@ -69,6 +71,15 @@ int rcwa_write_hdf5(const char *filename,
                     int npol,
                     int nfreq,
                     const char *const *pol_labels);
+
+/* 回折次数ごとの効率を rcwa_write_hdf5() が作ったファイルの /rcwa に足す。
+     /rcwa/R_orders, /rcwa/T_orders : double [npol][nfreq][nx][ny]
+     /rcwa/order_m [nx], /rcwa/order_n [ny] : 各軸の次数 (−Nx..Nx, −Ny..Ny)
+   R, T は [npol][nfreq][nx][ny] の行優先。nx = 2Nx+1, ny = 2Ny+1。
+   伝搬しない次数 (エバネッセント) は 0。成功で 0 */
+int rcwa_write_hdf5_orders(const char *filename,
+                           int npol, int nfreq, int nx, int ny,
+                           const double *R, const double *T);
 
 #ifdef __cplusplus
 }

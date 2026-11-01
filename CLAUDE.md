@@ -30,6 +30,12 @@ $OLDPWD/bin/orcwa -n 2 grating.ofd && cat rcwa_efficiency.csv
 
 # RCWA 単体テスト (パーサ/ドライバ/場出力)
 ./bin/tests/test_rcwa_input
+
+# core/ の積分器 (解析解・2 次収束・積分器どうしの一致)
+./bin/tests/test_core_integrators
+
+# RCWA の回帰テスト一式 (上の 2 本 + .ofd 経路の 2D / 分散 / 次数別効率)
+ctest --test-dir build
 ```
 
 - `test_rcwa_input` の終了コード = 失敗数。`All tests PASSED` が成功の目印。
@@ -66,12 +72,18 @@ $OLDPWD/bin/orcwa -n 2 grating.ofd && cat rcwa_efficiency.csv
 
 ## RCWA コアの規則 (数値安定性 — 実際に踏んだもの)
 
-- `.ofd` 入力キー: `rcwa = <N> <period[m]>` / `rcwalayer = <eps1r> <eps2r> <fill>
-  <thickness[m]> [<eps1i> <eps2i>]` / `planewave = <θ> <φ> <pol>`。
+- `.ofd` 入力キー: `rcwa = <Nx> <period_x[m]> [<Ny> <period_y[m]>]` /
+  `rcwalayer = <eps1r> <eps2r> <fill> <thickness[m]> [<eps1i> <eps2i> [<fill_y>]]` /
+  `planewave = <θ> <φ> <pol>`。`Ny period_y` を書くと 2D 格子 (層は eps1 の矩形
+  `[0, fill·Λx]×[0, fill_y·Λy]`、`fill_y` 既定 1 = y 一様)。層ごとに fill が違って
+  よい (ブリッジが全層共通のセル格子を作る。以前は fill 混在で落ちていた)。
   **厚みは物理長** (γ = k0·neff スケーリング前提)。誘電率の虚部は省略可
   (正 = 損失、実部が負の金属も可)。`planewave` の pol は無視され、TE/TM 両方を
-  常に出力する。`.ofd` 経路は 1D・単一周期・分散なしに限られる (2D や分散は
-  `.orcwa` + `orcwa_rcwa`)。
+  常に出力する。分散材料は `rcwadispersion = <layer> <side(1|2)> <einf> <ae> <be> <ce>`
+  (`.orcwa` の `material_dispersion` と同じ式・意味付け)。`.ofd` 経路の層形状は
+  矩形 1 つまで (円柱など任意形状は `.orcwa` + `orcwa_rcwa`)。2D / 分散の検証は `ci/check_rcwa_ofd2d.py` / `ci/check_rcwa_ofd_dispersion.py`。
+  回折次数ごとの効率は `rcwa_orders.csv` と HDF5 の `/rcwa/R_orders`・`T_orders`
+  (検証 `ci/check_rcwa_ofd_orders.py`)。GUI が読む `rcwa_efficiency.csv` の 6 列は変えない。
 - 固有値ソルバーは `rcwa/MKLEigenSolver.hpp` の 3 分岐
   (MKL / LAPACKE / Eigen フォールバック)。**±m 次数の縮退固有値**で
   固有ベクトル基底が不良条件になり回折効率が発散する事象があるため、
