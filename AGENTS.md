@@ -311,7 +311,8 @@ python3 ci/check_ploss.py lossy --sigma-e 0.5 --sigma-m 0.3 time_series_data.h5
 ```
 rcwa      = <Nx> <period_x[m]> [<Ny> <period_y[m]>]
 rcwalayer = <eps1r> <eps2r> <fill> <thickness[m]> [<eps1i> <eps2i> [<fill_y>]]
-planewave = <theta[deg]> <phi[deg]> <pol>
+rcwaincidence = <theta[deg]> <phi[deg]>            # RCWA の入射角 (planewave より優先)
+planewave = <theta[deg]> <phi[deg]> <pol>           # 従来の書き方 (rcwaincidence が無いとき)
 ```
 
 - **2D 格子**: `rcwa` に `Ny period_y` を足すと 2D になる (省略時は従来の 1D)。
@@ -342,9 +343,19 @@ planewave = <theta[deg]> <phi[deg]> <pol>
 - **誘電率の虚部は省略可** (省略時 0 = 無損失、従来の書式と後方互換)。
   損失は **正**の虚部 (exp(−iωt))。負は利得なので入力チェックで弾く。
   金属のように**実部が負**の材料も指定できる。
+- **入射角は `rcwaincidence = θ φ`、無ければ `planewave` の θ φ** (どちらも無ければ
+  法線入射)。θ は (−90, 90)。θ は法線からの角度で、入射側の横波数は
+  `k0·n_inc·sinθ·(cosφ, sinφ)` (θ > 0, φ = 0 の反射 1 次は m = −1)。
+  **`rcwaincidence` を足した理由**: `planewave` は FDTD の入射方向 (波が**来る**向き、
+  横波数は −sinθ·(cosφ, sinφ)。OpenFDTD-X の既定は θ = 90°) と同じ行で、意味が
+  違う。GUI で平面波を有効にしたまま RCWA を選ぶと θ = 90° で
+  「theta must be within (-90, 90)」になっていた。GUI は RCWA の角度を
+  `rcwaincidence` で書き、FDTD の `planewave` には触れない。rcwalayer の無い入力に
+  `rcwaincidence` があれば入力エラー。検証は `ci/check_rcwa_ofd_incidence.py`
+  (Fresnel / Brewster、`planewave` と一致、優先順位、コニカル入射の R+T=1、
+  鏡映で m → −m、入力エラー)。
 - **`planewave` の pol は無視される。** RCWA モードは常に TE/TM 両方を
-  計算して CSV の 4 列に出力する (列構成を固定するため)。使うのは θ/φ のみ。
-  `planewave` 自体を省略すると法線入射。θ は (−90, 90)。
+  計算して CSV の 4 列に出力する (列構成を固定するため)。
 - 偏波基底と Bloch 波数の決め方は `rcwa/RCWADriver.cpp` と**同一にすること**。
   正規化 (1/kzinc) と対で決まっており、片方だけ変えると斜め入射で R+T≠1 になる。
 - **分散材料**: `rcwadispersion = <layer(1..)> <side(1|2)> <einf> <ae> <be> <ce>`
