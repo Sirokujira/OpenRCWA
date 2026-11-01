@@ -170,3 +170,72 @@ int rcwa_write_hdf5(const char *filename,
 
 	return ierr;
 }
+
+/* [npol][nfreq][nx][ny] の double データセットを 1 つ書く */
+static int write_orders(hid_t gid, const char *name, int npol, int nfreq,
+                        int nx, int ny, const double *v)
+{
+	hsize_t dims[4];
+	dims[0] = (hsize_t)npol;
+	dims[1] = (hsize_t)nfreq;
+	dims[2] = (hsize_t)nx;
+	dims[3] = (hsize_t)ny;
+	hid_t sid = H5Screate_simple(4, dims, NULL);
+	hid_t did = H5Dcreate(gid, name, H5T_NATIVE_DOUBLE, sid,
+		H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+	int ierr = (did < 0);
+	if (did >= 0) {
+		if (H5Dwrite(did, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, v) < 0) ierr = 1;
+		H5Dclose(did);
+	}
+	H5Sclose(sid);
+	return ierr;
+}
+
+/* 次数の並び (−N..N) を書く */
+static int write_order_index(hid_t gid, const char *name, int n)
+{
+	int *idx = (int *)malloc((size_t)n * sizeof(int));
+	if (idx == NULL) return 1;
+	for (int i = 0; i < n; i++) idx[i] = i - (n - 1) / 2;
+	hsize_t dims[1];
+	dims[0] = (hsize_t)n;
+	hid_t sid = H5Screate_simple(1, dims, NULL);
+	hid_t did = H5Dcreate(gid, name, H5T_NATIVE_INT, sid,
+		H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+	int ierr = (did < 0);
+	if (did >= 0) {
+		if (H5Dwrite(did, H5T_NATIVE_INT, H5S_ALL, H5S_ALL, H5P_DEFAULT, idx) < 0) ierr = 1;
+		H5Dclose(did);
+	}
+	H5Sclose(sid);
+	free(idx);
+	return ierr;
+}
+
+int rcwa_write_hdf5_orders(const char *filename,
+                           int npol, int nfreq, int nx, int ny,
+                           const double *R, const double *T)
+{
+	if ((filename == NULL) || (R == NULL) || (T == NULL) ||
+	    (npol < 1) || (nfreq < 1) || (nx < 1) || (ny < 1)) {
+		return 1;
+	}
+	hid_t file_id = H5Fopen(filename, H5F_ACC_RDWR, H5P_DEFAULT);
+	if (file_id < 0) {
+		return 1;
+	}
+	hid_t gid = H5Gopen(file_id, "/rcwa", H5P_DEFAULT);
+	if (gid < 0) {
+		H5Fclose(file_id);
+		return 1;
+	}
+	int ierr = 0;
+	ierr |= write_orders(gid, "R_orders", npol, nfreq, nx, ny, R);
+	ierr |= write_orders(gid, "T_orders", npol, nfreq, nx, ny, T);
+	ierr |= write_order_index(gid, "order_m", nx);
+	ierr |= write_order_index(gid, "order_n", ny);
+	H5Gclose(gid);
+	H5Fclose(file_id);
+	return ierr;
+}

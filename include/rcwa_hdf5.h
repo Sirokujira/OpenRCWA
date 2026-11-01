@@ -72,6 +72,15 @@ int rcwa_write_hdf5(const char *filename,
                     int nfreq,
                     const char *const *pol_labels);
 
+/* 回折次数ごとの効率を rcwa_write_hdf5() が作ったファイルの /rcwa に足す。
+     /rcwa/R_orders, /rcwa/T_orders : double [npol][nfreq][nx][ny]
+     /rcwa/order_m [nx], /rcwa/order_n [ny] : 各軸の次数 (−Nx..Nx, −Ny..Ny)
+   R, T は [npol][nfreq][nx][ny] の行優先。nx = 2Nx+1, ny = 2Ny+1。
+   伝搬しない次数 (エバネッセント) は 0。成功で 0 */
+int rcwa_write_hdf5_orders(const char *filename,
+                           int npol, int nfreq, int nx, int ny,
+                           const double *R, const double *T);
+
 #ifdef __cplusplus
 }
 #endif

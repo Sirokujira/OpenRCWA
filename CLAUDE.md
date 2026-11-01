@@ -30,6 +30,9 @@ $OLDPWD/bin/orcwa -n 2 grating.ofd && cat rcwa_efficiency.csv
 
 # RCWA 単体テスト (パーサ/ドライバ/場出力)
 ./bin/tests/test_rcwa_input
+
+# RCWA の回帰テスト一式 (test_rcwa_input + .ofd 経路の 2D / 分散 / 次数別効率)
+ctest --test-dir build
 ```
 
 - `test_rcwa_input` の終了コード = 失敗数。`All tests PASSED` が成功の目印。
@@ -76,6 +79,8 @@ $OLDPWD/bin/orcwa -n 2 grating.ofd && cat rcwa_efficiency.csv
   常に出力する。分散材料は `rcwadispersion = <layer> <side(1|2)> <einf> <ae> <be> <ce>`
   (`.orcwa` の `material_dispersion` と同じ式・意味付け)。`.ofd` 経路の層形状は
   矩形 1 つまで (円柱など任意形状は `.orcwa` + `orcwa_rcwa`)。2D / 分散の検証は `ci/check_rcwa_ofd2d.py` / `ci/check_rcwa_ofd_dispersion.py`。
+  回折次数ごとの効率は `rcwa_orders.csv` と HDF5 の `/rcwa/R_orders`・`T_orders`
+  (検証 `ci/check_rcwa_ofd_orders.py`)。GUI が読む `rcwa_efficiency.csv` の 6 列は変えない。
 - 固有値ソルバーは `rcwa/MKLEigenSolver.hpp` の 3 分岐
   (MKL / LAPACKE / Eigen フォールバック)。**±m 次数の縮退固有値**で
   固有ベクトル基底が不良条件になり回折効率が発散する事象があるため、

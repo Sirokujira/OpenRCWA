@@ -216,6 +216,24 @@ extern "C" int rcwa_run(FILE *fp_log)
 	}
 	fprintf(csv, "frequency[Hz],lambda[m],R_TE,T_TE,R_TM,T_TM\n");
 
+	/* 回折次数ごとの効率。rcwa_efficiency.csv (GUI が読む 6 列) は変えずに
+	   別ファイルに出す。伝搬する次数 (R か T が 0 でない) だけを 1 行ずつ書く。
+	   次数 (m, n) は RCWASolver の並び k = (2Ny+1)·(m+Nx) + (n+Ny) */
+	const char ordname[] = "rcwa_orders.csv";
+	FILE *ord = fopen(ordname, "w");
+	if (ord == NULL) {
+		printf("*** file %s open error.\n", ordname);
+		fclose(csv);
+		return 1;
+	}
+	fprintf(ord, "frequency[Hz],lambda[m],pol,m,n,R,T\n");
+	const int nOrdX = 2 * NRcwaHarmonics + 1;
+	const int nOrdY = 2 * NRcwaHarmonicsY + 1;
+	const size_t nOrd = (size_t)nOrdX * (size_t)nOrdY;
+	/* HDF5 用 [npol][nfreq][nx][ny] */
+	std::vector<double> ordR(2 * (size_t)NFreq1 * nOrd, 0.0);
+	std::vector<double> ordT(2 * (size_t)NFreq1 * nOrd, 0.0);
+
 	/* HDF5 出力用に全点を溜める (CSV は従来どおり逐次書き出す)。
 	   レイアウトは [npol][nfreq] の行優先: 先に TE の全周波数、次に TM。 */
 	std::vector<rcwa_spectrum_row_t> spectrum(2 * (size_t)NFreq1);
@@ -273,6 +291,24 @@ extern "C" int rcwa_run(FILE *fp_log)
 			solver.scatterPlaneWave(cInc, 0, NRcwaLayer - 1, k0, REF, TRN);
 			R[pol] = REF.sum();
 			T[pol] = TRN.sum();
+			if (((size_t)REF.size() == nOrd) && ((size_t)TRN.size() == nOrd)) {
+				const size_t base = ((size_t)pol * (size_t)NFreq1 + (size_t)ifreq) * nOrd;
+				for (size_t k = 0; k < nOrd; k++) {
+					ordR[base + k] = REF((Eigen::Index)k);
+					ordT[base + k] = TRN((Eigen::Index)k);
+				}
+			}
+		}
+
+		for (int pol = 0; pol < 2; pol++) {
+			const size_t base = ((size_t)pol * (size_t)NFreq1 + (size_t)ifreq) * nOrd;
+			for (size_t k = 0; k < nOrd; k++) {
+				if ((ordR[base + k] == 0.0) && (ordT[base + k] == 0.0)) continue;
+				const int m = (int)(k / (size_t)nOrdY) - NRcwaHarmonics;
+				const int n = (int)(k % (size_t)nOrdY) - NRcwaHarmonicsY;
+				fprintf(ord, "%.8e,%.8e,%s,%d,%d,%.8e,%.8e\n", freq, lambda,
+					(pol == 0) ? "TE" : "TM", m, n, ordR[base + k], ordT[base + k]);
+			}
 		}
 
 		fprintf(csv, "%.8e,%.8e,%.8e,%.8e,%.8e,%.8e\n",
@@ -311,9 +347,10 @@ extern "C" int rcwa_run(FILE *fp_log)
 	}
 
 	fclose(csv);
+	fclose(ord);
 
 	if (!ierr) {
-		sprintf(str, "output : %s", csvname);
+		sprintf(str, "output : %s, %s", csvname, ordname);
 		monitor1(fp_log, str);
 
 		/* GUI 表示用の HDF5。CSV と並行して出力する (既存の流れは変えない)。
@@ -335,8 +372,10 @@ extern "C" int rcwa_run(FILE *fp_log)
 				spectrum[(size_t)nwritten + (size_t)i] =
 					spectrum[(size_t)NFreq1 + (size_t)i];
 		}
-		if (rcwa_write_hdf5(h5name, &meta, spectrum.data(),
-		                    2, nwritten, pol_labels) == 0) {
+		if ((rcwa_write_hdf5(h5name, &meta, spectrum.data(),
+		                     2, nwritten, pol_labels) == 0) &&
+		    (rcwa_write_hdf5_orders(h5name, 2, nwritten, nOrdX, nOrdY,
+		                            ordR.data(), ordT.data()) == 0)) {
 			sprintf(str, "output : %s", h5name);
 		} else {
 			sprintf(str, "*** warning : %s write failed (CSV is still valid)", h5name);

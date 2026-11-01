@@ -159,6 +159,8 @@ R_TE 9e-6 / R_TM 8.7e-5)。**新しい格子サンプルを足すときは、TE 
 | `/metadata/npol`, `pol_labels` | 偏波数と名前 (`.ofd` は 2 = TE/TM、`.orcwa` は 1) |
 | `/metadata/NFreq`, `theta`, `phi`, `rcwa_harmonics`, `rcwa_period`, `rcwa_harmonics_y`, `rcwa_period_y`, `rcwa_nlayer`, `Title` | 計算条件 (`_y` は 1D 格子なら 0) |
 | `/rcwa/spectrum` | compound **[npol][NFreq]** = `{frequency[Hz], lambda[m], R, T, A}` |
+| `/rcwa/R_orders`, `/rcwa/T_orders` | double **[npol][NFreq][2Nx+1][2Ny+1]** = 回折次数ごとの効率 (`.ofd` 経路のみ。エバネッセント次数は 0) |
+| `/rcwa/order_m`, `/rcwa/order_n` | 各軸の次数 (−Nx..Nx / −Ny..Ny) |
 
 - **`spectrum` は 2 次元**なので、偏波ごとに 1 本の曲線として素直に読める。
 - **波長は [m]**。`.orcwa` の内部単位は μm だが、書き出し時に m へ揃えてある。
@@ -315,6 +317,13 @@ planewave = <theta[deg]> <phi[deg]> <pol>
   Fourier 係数を変えないので結果は変わらない。
 - 2D の検証は `ci/check_rcwa_ofd2d.py` (1D との一致・C4 対称・90° 回転・
   `.orcwa` 経路との一致・fill 混在)。CI の Linux / macOS / Windows で実行する。
+- **回折次数ごとの効率**は `rcwa_orders.csv` (`frequency[Hz],lambda[m],pol,m,n,R,T`、
+  伝搬する次数だけ) と HDF5 の `/rcwa/R_orders`・`T_orders` に出る。
+  `rcwa_efficiency.csv` (GUI が読む 6 列) は変えないこと。次数の並びは
+  `RCWASolver::evaluateAlphaBeta()` の `k = (2Ny+1)·(m+Nx) + (n+Ny)`
+  (kx = kx0 + 2πm/Λx)。伝搬判定は値が厳密に 0 かどうか (エバネッセント次数は
+  Re(kz)=0 で厳密に 0 になる)。検証は `ci/check_rcwa_ofd_orders.py`
+  (和 = 合計、格子方程式、法線入射の ±m 対称、斜め入射での m / n の符号)。
 
 - **誘電率の虚部は省略可** (省略時 0 = 無損失、従来の書式と後方互換)。
   損失は **正**の虚部 (exp(−iωt))。負は利得なので入力チェックで弾く。

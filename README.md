@@ -11,21 +11,23 @@ subprocess として起動されます。
 
 - **RCWA モード** — `.ofd` に `rcwa` / `rcwalayer` キーがあると、
   `rcwa/RCWASolver` (平面波回折) で層スタックを解き、周波数掃引の
-  回折効率を `rcwa_efficiency.csv` に出力します (垂直入射、TE/TM 両偏波)。
-  ブリッジは `sol/rcwa_bridge.cpp`。単一界面・薄膜干渉・1/4 波長 AR コートで
-  フレネル解析解と一致することを検証済み、CI でエネルギー保存
-  (R+T=1) を常時チェックします。
+  回折効率を `rcwa_efficiency.csv` (TE/TM 両偏波の R, T) と
+  `rcwa_orders.csv` (回折次数ごと) に出力します。斜め入射・円錐回折、
+  1D / 2D 格子 (層ごとに矩形 1 つ)、複素誘電率と Lorentz 分散に対応します。
+  ブリッジは `sol/rcwa_bridge.cpp`。Fresnel・Brewster・1/4 波長 AR コート・
+  金属薄膜の特性行列法 (解析解) と一致し、`.orcwa` 経路とも一致することを
+  CI で常時検証しています (無損失なら R+T=1)。
 - **FDTD モード** — それ以外の入力は OpenFDTD 由来の FDTD 経路で
   動作します (従来通り)。
 
 `orcwa` とは別に、RCWA 専用のドライバ **`orcwa_rcwa`** があります。
 こちらは `.orcwa` 形式 (テキスト、`.ofd` と共通の書式) を直接受け取り、
-`orcwa` の RCWA モードでは扱えない以下に対応します:
+`orcwa` の RCWA モード (`.ofd`) では扱えない以下に対応します:
 
-- 斜め入射・円錐回折 (`planewave = θ φ pol [psi]`)、任意の直線/円偏波
-- 2D 周期格子、円柱・球などの形状レイヤ、GDSII 由来パターン
-- 分散性・磁性・複素誘電率の材料指定 (多極 Lorentz + 導電率)
-- 回折次数ごとの効率出力と、断面場 (Ex..Hz) の CSV / 画像出力
+- 任意の直線偏波・円偏波 (`planewave = θ φ pol [psi]`。`.ofd` は TE/TM 固定)
+- 円柱・球などの形状レイヤ、GDSII 由来パターン (`.ofd` は層ごとに矩形 1 つ)
+- 磁性材料と導電率による損失 (`material` の amur/msgm/esgm)
+- 断面場 (Ex..Hz) の CSV / 画像出力
 
 ```sh
 ./bin/orcwa_rcwa [-o out.csv] [-v] \
@@ -50,7 +52,7 @@ subprocess として起動されます。
 | `rcwa/` | RCWA コア: 層状周期構造の固有値問題 (`FourierSolver1D/2D`, `Layer`, `RCWASolver`)。MKL があれば LAPACKE、無ければ Eigen ソルバへフォールバック | `orcwa` に結線済み |
 | `core/` | RCWA の積分器 (`RCWAIntegrator` / `RedhefferIntegrator` / `DifferentialIntegrator`)。導波モード基底の別系統 | テストからのみ到達可 |
 | `gdstk/` | GDS 形状の取り扱い (gdstk 由来) | rcwa 用 |
-| `tests/` | RCWA コアのテストバイナリ (`test_cpu`, `test_gds_cpu` ほか)。`-DWITH_RCWA_TESTS=ON` | ビルドのみ (CTest 未登録・アサーション整備は今後) |
+| `tests/` | RCWA の単体テスト `test_rcwa_input` (解析解比較つき) と旧テストバイナリ (`test_cpu`, `test_gds_cpu` ほか)。`WITH_RCWA` (既定 ON) | `test_rcwa_input` は CTest 登録済み。旧テストはビルドのみ |
 | `python/` | 入力生成スクリプト (`datalib/sample_rcwa_grating.py` など) | FDTD 前提 |
 | `post/` | ポスト処理 (ev2/ev3、周波数/遠方界/近傍界プロット、HDF5 読込) | 動作 |
 
@@ -100,20 +102,44 @@ cat rcwa_efficiency.csv    # frequency, lambda, R_TE, T_TE, R_TM, T_TM
 入力キー:
 
 ```
-# rcwa = <空間高調波次数 N> <格子周期[m]>       (計算次数は 2N+1)
+# rcwa = <Nx> <周期 Λx[m]> [<Ny> <周期 Λy[m]>]   (計算次数は (2Nx+1)(2Ny+1))
+#   Ny Λy を書くと 2D 格子、省略すると 1D (y 方向一様)
 rcwa = 5 3.0e-7
-# rcwalayer = <eps1> <eps2> <fill> <厚さ[m]>    (入射側 → 透過側の順)
-#   eps1: x = 0 .. fill*period, eps2: 残り。一様層は eps1 = eps2。
-#   先頭と末尾は半無限層 (厚さは無視)。
+# rcwalayer = <eps1r> <eps2r> <fill> <厚さ[m]> [<eps1i> <eps2i> [<fill_y>]]
+#   1 周期内で eps1 が矩形 [0, fill*Λx] x [0, fill_y*Λy] を占め、残りが eps2。
+#   fill_y は省略時 1 (1D 線格子)。一様層は eps1 = eps2。層ごとに fill が違ってよい。
+#   虚部は損失 (正の値、exp(-iωt))。実部が負の金属も可。
+#   入射側 → 透過側の順。先頭と末尾は半無限層 (厚さは無視、均質であること)。
 rcwalayer = 1.0  1.0  0.5 0
 rcwalayer = 4.0  1.0  0.5 2.0e-7
 rcwalayer = 2.25 2.25 0.5 0
+# 分散材料 (任意): 層 (1 始まり) の eps1 (1) / eps2 (2) に Lorentz 極を与える
+#   rcwadispersion = <layer> <1|2> <einf> <ae> <be> <ce>   [rad/s]
+#   eps(ω) = einf + Σ ae²/(ce² − ω² − i·be·ω)   (複数行で極が加算される)
+# 入射方向 (任意): θ, φ [deg]。pol は無視され、TE/TM の両方を出力する
+planewave = 0 0 1
 # 波長は frequency1 から lambda = c/f で決まる
 frequency1 = 4.3e14 7.5e14 16
 ```
 
-制約: 垂直入射のみ、y 方向一様 (1D 格子)、損失なし誘電体。
-斜入射・2D パターン・GDS 形状は `tests/` の別系統が対象。
+出力:
+
+| ファイル | 内容 |
+|---|---|
+| `rcwa_efficiency.csv` | `frequency[Hz],lambda[m],R_TE,T_TE,R_TM,T_TM` (全次数の合計) |
+| `rcwa_orders.csv` | `frequency[Hz],lambda[m],pol,m,n,R,T` (伝搬する回折次数ごと) |
+| `time_series_data.h5` | `/rcwa/spectrum` と `/rcwa/R_orders`・`T_orders` ほか (GUI 表示用) |
+
+サンプルは `data/sample/` (`grating.ofd`, `rcwa_oblique.ofd`, `rcwa_metal.ofd`,
+`rcwa_rect2d.ofd`, `rcwa_drude_film.ofd` ほか。期待値は `AGENTS.md`)。
+円柱など任意形状の層・磁性材料・任意偏波・断面場の出力は `.orcwa` +
+`orcwa_rcwa` を使います。
+
+RCWA の回帰テストは CTest に登録してあります:
+
+```sh
+ctest --test-dir build    # test_rcwa_input + .ofd 経路 (2D / 分散 / 次数別効率)
+```
 
 ### FDTD モード
 
@@ -134,9 +160,11 @@ grep "normal end" orcwa.log
 
 ## 今後の課題
 
-1. RCWA モードの拡張: 斜入射 (入射角掃引)、2D パターン層、
-   損失性材料 (複素誘電率)、次数別効率の出力
-2. `tests/` へ基準データ同梱 + 許容閾値 + CTest 登録
+1. RCWA モード: 入射角の掃引はカーネル 1 回につき 1 角度 (GUI が角度ごとに
+   orcwa を実行する)。円柱など任意形状の層は `.ofd` 経路では書けない
+   (`.orcwa` 経路で対応)
+2. 旧テストバイナリ (`tests/` の `test_cpu` / `test_gds_cpu` ほか) の基準データ
+   同梱 + 許容閾値 + CTest 登録
 
 ## Reference
 
