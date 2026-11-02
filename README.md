@@ -116,8 +116,10 @@ rcwalayer = 2.25 2.25 0.5 0
 # 分散材料 (任意): 層 (1 始まり) の eps1 (1) / eps2 (2) に Lorentz 極を与える
 #   rcwadispersion = <layer> <1|2> <einf> <ae> <be> <ce>   [rad/s]
 #   eps(ω) = einf + Σ ae²/(ce² − ω² − i·be·ω)   (複数行で極が加算される)
-# 入射方向 (任意): θ, φ [deg]。pol は無視され、TE/TM の両方を出力する
-planewave = 0 0 1
+# 入射方向 (任意): θ, φ [deg]。θ は法線からの角度 (-90 < θ < 90)、φ は入射面の
+#   方位。TE/TM の両方を出力する。従来の planewave = θ φ pol も使える
+#   (pol は無視。rcwaincidence があればそちらが優先)
+rcwaincidence = 0 0
 # 波長は frequency1 から lambda = c/f で決まる
 frequency1 = 4.3e14 7.5e14 16
 ```

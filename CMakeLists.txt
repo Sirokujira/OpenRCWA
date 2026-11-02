@@ -649,6 +649,9 @@ if(WITH_RCWA)
         add_test(NAME rcwa_ofd_orders
             COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/ci/check_rcwa_ofd_orders.py
                     --orcwa $<TARGET_FILE:orcwa>)
+        add_test(NAME rcwa_ofd_incidence
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/ci/check_rcwa_ofd_incidence.py
+                    --orcwa $<TARGET_FILE:orcwa>)
     else()
         message(STATUS "Python 3 が見つからないので .ofd 経路の RCWA テスト (ctest) は登録しません")
     endif()

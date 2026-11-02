@@ -62,10 +62,12 @@ extern int          NRcwaHarmonicsY;
 extern double       RcwaPeriodY;
 extern int          NRcwaLayer;      /* 層数 (0 = FDTD 経路) */
 extern rcwalayer_t  *RcwaLayer;      /* 層スタック (入射側 → 透過側) */
-/* 入射方向 [deg]。planewave キーから複写する (無指定なら 0 = 法線入射)。
-   planewave の pol は使わない — RCWA モードは常に TE/TM 両方を出力する。 */
+/* 入射方向 [deg]。rcwaincidence = θ φ があればそれを、無ければ planewave の
+   θ φ を使う (どちらも無ければ 0 = 法線入射)。planewave の pol は使わない —
+   RCWA モードは常に TE/TM 両方を出力する。 */
 extern double       RcwaTheta;
 extern double       RcwaPhi;
+extern int          IRcwaIncidence;  /* rcwaincidence キーがあれば 1 */
 
 /* frequency1 掃引の回折効率を計算し rcwa_efficiency.csv に出力する。
    正常終了で 0 */
